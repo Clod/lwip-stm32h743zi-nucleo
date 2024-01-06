@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 On-Line Applications Research Corporation (OAR)
+ * Copyright (C) 2024 On-Line Applications Research Corporation (OAR)
  * Written by Kinsey Moore <kinsey.moore@oarcorp.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -60,16 +60,4 @@ BaseType_t xPortInstallInterruptHandler(
   );
 
   return sc;
-}
-
-/* Enable the interrupt */
-void XScuGic_EnableIntr ( u32 DistBaseAddress, u32 Int_Id )
-{
-  rtems_interrupt_vector_enable( Int_Id );
-}
-
-/* Disable the interrupt */
-void XScuGic_DisableIntr ( u32 DistBaseAddress, u32 Int_Id )
-{
-  rtems_interrupt_vector_disable( Int_Id );
 }

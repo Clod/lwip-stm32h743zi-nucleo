@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2022 On-Line Applications Research Corporation (OAR)
- * Written by Kinsey Moore <kinsey.moore@oarcorp.com>
+ * Copyright (C) 2024 On-Line Applications Research Corporation (OAR)
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -24,15 +23,13 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef XPSEUDO_ASM_H
-#define XPSEUDO_ASM_H
+#ifndef _RTEMSLWIP_ZYNQ_XIL_COMPAT_LWIP_H
+#define _RTEMSLWIP_ZYNQ_XIL_COMPAT_LWIP_H
 
-#include <rtems/score/cpu.h>
-#if defined(__arm__) && !defined(ARMR5)
-#define dsb() _ARM_Data_synchronization_barrier()
-#define isb() _ARM_Instruction_synchronization_barrier()
-#else
-#define dsb() _AARCH64_Data_synchronization_barrier()
-#endif
+#include <xil-compat-lwip-common.h>
+
+#define dsb _ARM_Data_synchronization_barrier
+#define PRIV_RW_USER_RW (0x00000003UL<<8U)
+#define STRONG_ORDERD_SHARED 0x00000000U
 
 #endif
