@@ -35,9 +35,7 @@
 #ifndef __DRV_PHY_H
 #define __DRV_PHY_H
 
-#ifdef __rtems__
 #include <bsp/ti_herc/reg_mdio.h>
-#endif /* __rtems__ */
 
 #ifdef __cplusplus
 extern "C" {

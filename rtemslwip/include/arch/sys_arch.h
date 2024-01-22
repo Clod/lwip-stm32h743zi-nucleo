@@ -68,13 +68,9 @@ typedef port_mailbox_t sys_mbox_t;
 typedef port_sem_t sys_sem_t;
 typedef rtems_id sys_thread_t;
 typedef port_mutex_t sys_mutex_t;
-#ifdef __rtems__
 #include <rtems/score/threaddispatch.h>
 #ifdef RTEMS_SMP
 typedef Per_CPU_Control *sys_prot_t;
-#else
-typedef rtems_interrupt_level sys_prot_t;
-#endif
 #else
 typedef rtems_interrupt_level sys_prot_t;
 #endif
@@ -109,26 +105,9 @@ sys_arch_unmask_interrupt_source(unsigned int x)
   bsp_interrupt_vector_enable(x);
 }
 
-#ifndef __rtems__
-static inline sys_prot_t
-sys_arch_protect(void)
-{
-  sys_prot_t pval;
-
-  rtems_interrupt_disable(pval);
-  return pval;
-}
-
-static inline void
-sys_arch_unprotect(sys_prot_t pval)
-{
-  rtems_interrupt_enable(pval);
-}
-#else
 sys_prot_t sys_arch_protect();
 
 void sys_arch_unprotect(sys_prot_t pval);
-#endif
 
 static inline void
 sys_arch_data_sync_barier(void)
