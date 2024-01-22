@@ -296,6 +296,46 @@ sys_thread_new(const char *name, lwip_thread_fn function, void *arg, int stack_s
   return id;
 }
 
+sys_thread_t sys_thread_new_affinity(
+  const char *name,
+  lwip_thread_fn function,
+  void *arg,
+  int stack_size,
+  int prio,
+  cpu_set_t *set
+)
+{
+  rtems_id id;
+  rtems_status_code res;
+
+  res = rtems_task_create(
+    rtems_build_name(name[0], name[1], name[2], name[3]),
+    prio,
+    stack_size,
+    RTEMS_PREEMPT,
+    0,
+    &id
+    );
+
+  if (res != RTEMS_SUCCESSFUL) {
+    return 0;
+  }
+
+  res = rtems_task_set_affinity( id, sizeof( cpu_set_t ), set );
+
+  if (res != RTEMS_SUCCESSFUL) {
+    return 0;
+  }
+
+  res = rtems_task_start(id, (rtems_task_entry)function, (rtems_task_argument)arg);
+
+  if (res != RTEMS_SUCCESSFUL) {
+    rtems_task_delete(id);
+    return 0;
+  }
+  return id;
+}
+
 err_t
 sys_mutex_new(sys_mutex_t *mutex)
 {

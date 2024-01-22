@@ -37,6 +37,7 @@ int start_networking(
   unsigned char *mac_ethernet_address
 )
 {
+  cpu_set_t set;
   start_networking_shared();
 
   if ( !xemac_add(
@@ -54,12 +55,17 @@ int start_networking(
 
   netif_set_up( net_interface );
 
-  sys_thread_new(
+  CPU_ZERO( &set );
+  /* Move task to CPU 0 */
+  CPU_SET( 0, &set );
+
+  sys_thread_new_affinity(
     "xemacif_input_thread",
     ( void ( * )( void * ) )xemacif_input_thread,
     net_interface,
     1024,
-    DEFAULT_THREAD_PRIO
+    DEFAULT_THREAD_PRIO,
+    &set
   );
 
   return 0;

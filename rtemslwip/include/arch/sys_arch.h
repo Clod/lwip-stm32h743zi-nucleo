@@ -117,4 +117,20 @@ sys_arch_data_sync_barier(void)
 #endif
 }
 
+/*
+ * This must match the definition in lwIP's lwip/sys.h
+ * It can't be included from there since this file is included there before the
+ * typedef.
+ */
+typedef void (*lwip_thread_fn)(void *arg);
+
+/* This is a thread creator that can be passed CPU affinity */
+sys_thread_t sys_thread_new_affinity(
+  const char *name,
+  lwip_thread_fn function,
+  void *arg,
+  int stack_size,
+  int prio,
+  cpu_set_t *set
+);
 #endif /* __ARCH_SYS_ARCH_H__ */
