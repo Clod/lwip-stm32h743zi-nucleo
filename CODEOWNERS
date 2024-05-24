@@ -2,5 +2,5 @@ Add General Network as the owner for the entire repository.
 # Please keep users, directories and files  sorted alphabetically.
 # Directories first
 
-[General Maintainer] @approvers/general/network
+[General Network] @approvers/general/network
 *
