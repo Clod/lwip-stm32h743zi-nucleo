@@ -1,5 +1,5 @@
-Overview
---------
+RTEMS lwIP
+==========
 
 The rtems-lwip repository serves as a central location to manage integration of
 lwIP with RTEMS in a more user-accessible manner and to provide a repository of
@@ -15,21 +15,26 @@ applicable.
 
 Installation Instructions
 -------------------------
-1. Populate the git submodules:
+  1. Populate the git submodules:
 
-```
-git submodule init
-git submodule update
-```
-2. Configure and build
-```
-./waf configure --prefix=INSTALL_PREFIX
-./waf
-./waf install
-```
+     ```shell
+     git submodule init
+     git submodule update
+     ```
+
+  2. Configure and build
+
+     ```shell
+     ./waf configure --prefix=INSTALL_PREFIX
+     ./waf
+     ./waf install
+     ```
 
 More `waf` arguments can be found by using:
-`./waf --help`
+
+  ```shell
+  ./waf --help
+  ```
 
 Further Build Information
 -------------------------
@@ -41,6 +46,20 @@ in config.ini will still be applied for enabled BSPs. Any additional
 configuration options desired in lwipopts.h may be specified in config.ini under
 the appropriate section as key/value pairs like so:
 
-[aarch64/xilinx_zynqmp_lp64_zu3eg]
-LWIP_IGMP=1
-ZYNQMP_USE_SGMII=1
+  ```ini
+  [aarch64/xilinx_zynqmp_lp64_zu3eg]
+  LWIP_IGMP=1
+  ZYNQMP_USE_SGMII=1
+  ```
+
+Source origins
+--------------
+
+| Directory  | Origin                                        |
+| ---        | ---                                           |
+| cpsw       | https://github.com/ragunath3252/cpsw-lwip.git |
+| defs       | Written specifically for this project.        |
+| embeddedsw | https://github.com/Xilinx/embeddedsw.git      |
+| lwip       | git://git.savannah.gnu.org/lwip.git           |
+| rtemslwip  | Written specfically or pulled from RTEMS      |
+
