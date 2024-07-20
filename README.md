@@ -5,13 +5,6 @@ The rtems-lwip repository serves as a central location to manage integration of
 lwIP with RTEMS in a more user-accessible manner and to provide a repository of
 network drivers for RTEMS BSPs.
 
-File Origins
-------------
-
-The sources presented here originate in one of several locations described by
-the ORIGIN.* files and whose license is described by the COPYING.* files.
-Commits adding such files should include the hash of the target repository if
-applicable.
 
 Installation Instructions
 -------------------------
@@ -52,9 +45,17 @@ the appropriate section as key/value pairs like so:
   ZYNQMP_USE_SGMII=1
   ```
 
+
+File Origins
+------------
+The sources presented here originate in one of several locations described by
+the Source origins below and files and whose license is described by the
+LICENSE.md file.  Commits adding such files should include the hash of the
+target repository if applicable.
+
+
 Source origins
 --------------
-
 | Directory  | Origin                                        |
 | ---        | ---                                           |
 | cpsw       | https://github.com/ragunath3252/cpsw-lwip.git |
