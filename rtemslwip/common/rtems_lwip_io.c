@@ -171,7 +171,7 @@ int socket(
 
   rtems_lwip_semaphore_obtain();
 
-  lwipfd = lwip_socket( domain, type, 0 );
+  lwipfd = lwip_socket( domain, type, protocol );
 
   if ( lwipfd < 0 ) {
     return -1;
