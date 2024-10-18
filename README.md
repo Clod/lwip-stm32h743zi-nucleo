@@ -40,7 +40,7 @@ configuration options desired in lwipopts.h may be specified in config.ini under
 the appropriate section as key/value pairs like so:
 
   ```ini
-  [aarch64/xilinx_zynqmp_lp64_zu3eg]
+  [aarch64/zynqmp_zu3eg]
   LWIP_IGMP=1
   ZYNQMP_USE_SGMII=1
   ```
