@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2022 On-Line Applications Research Corporation (OAR)
- * Written by Kinsey Moore <kinsey.moore@oarcorp.com>
+ * Copyright (C) 2024 On-Line Applications Research Corporation (OAR)
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -24,43 +23,14 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "netif/xtopology.h"
-#include "xparameters_ps.h"
-#include <netif/xemacpsif.h>
+#ifndef _RTEMSLWIP_ZYNQMP_XIL_COMPAT_LWIP_H
+#define _RTEMSLWIP_ZYNQMP_XIL_COMPAT_LWIP_H
 
-struct xtopology_t xtopology[] = {
-  {
-    ZYNQMP_EMACPS_3_BASEADDR,
-    xemac_type_emacps,
-    0x0,
-    0x0,
-    0xF8F00100,
-    XPS_GEM3_INT_ID,
-  },
-  {
-    ZYNQMP_EMACPS_2_BASEADDR,
-    xemac_type_emacps,
-    0x0,
-    0x0,
-    0xF8F00100,
-    XPS_GEM2_INT_ID,
-  },
-  {
-    ZYNQMP_EMACPS_1_BASEADDR,
-    xemac_type_emacps,
-    0x0,
-    0x0,
-    0xF8F00100,
-    XPS_GEM1_INT_ID,
-  },
-  {
-    ZYNQMP_EMACPS_0_BASEADDR,
-    xemac_type_emacps,
-    0x0,
-    0x0,
-    0xF8F00100,
-    XPS_GEM0_INT_ID,
-  },
-};
+#include <xil-compat-lwip-common.h>
 
-int xtopology_n_emacs = 4;
+#define dsb _AARCH64_Data_synchronization_barrier
+#define INNER_SHAREABLE (0x3 << 8)
+#define NORM_NONCACHE 0x401UL
+
+
+#endif

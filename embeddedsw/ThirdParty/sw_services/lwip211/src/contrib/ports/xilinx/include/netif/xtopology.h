@@ -35,7 +35,11 @@
 extern "C" {
 #endif
 
+#ifndef __rtems__
 #include "xil_types.h"
+#else /* __rtems__ */
+#include <xil-compat-lwip.h>
+#endif /* __rtems__ */
 
 enum xemac_types { xemac_type_unknown = -1, xemac_type_xps_emaclite, xemac_type_xps_ll_temac, xemac_type_axi_ethernet, xemac_type_emacps };
 

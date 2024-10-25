@@ -41,6 +41,7 @@ extern "C" {
 #include "lwip/sys.h"
 #include "netif/xadapter.h"
 
+#ifndef __rtems__
 #include "xstatus.h"
 #include "sleep.h"
 #include "xparameters.h"
@@ -52,6 +53,9 @@ extern "C" {
 #include "xpseudo_asm.h"
 #include "xil_cache.h"
 #include "xil_printf.h"
+#else /* __rtems__ */
+#include <xil-compat-lwip.h>
+#endif /* __rtems__ */
 #include "xscugic.h"
 #include "xemacps.h"		/* defines XEmacPs API */
 

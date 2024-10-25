@@ -77,11 +77,15 @@ extern "C" {
 
 /***************************** Include Files *********************************/
 
+#ifndef __rtems__
 #include "xil_types.h"
 #include "xil_assert.h"
 #include "xil_io.h"
 #include "xil_exception.h"
 #include "bspconfig.h"
+#else /* __rtems__ */
+#include <xil-compat-lwip.h>
+#endif /* __rtems__ */
 
 /************************** Constant Definitions *****************************/
 #if defined (versal) && !defined(ARMR5)

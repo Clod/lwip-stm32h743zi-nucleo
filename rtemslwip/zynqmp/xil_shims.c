@@ -24,13 +24,13 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "xil_mmu.h"
 #include <rtems/rtems/cache.h>
 #include <rtems/rtems/intr.h>
 #include <rtems/score/threadimpl.h>
 #include <libcpu/mmu-vmsav8-64.h>
 #include <stdio.h>
 #include <string.h>
+#include <xil-compat-lwip.h>
 
 #define TWO_MB (2*1024*1024)
 #define ONE_GB (1024*1024*1024)
@@ -100,14 +100,4 @@ void XScuGic_EnableIntr ( u32 DistBaseAddress, u32 Int_Id )
 void XScuGic_DisableIntr ( u32 DistBaseAddress, u32 Int_Id )
 {
   rtems_interrupt_vector_disable( Int_Id );
-}
-
-/*
- * The Xilinx code was written such that it assumed there was no invalidate-only
- * functionality on A53 cores. This function must flush and invalidate because
- * of how they mapped things.
- */
-void Xil_DCacheInvalidateRange( INTPTR adr, INTPTR len )
-{
-  rtems_cache_flush_multiple_data_lines( (const void *) adr, len );
 }

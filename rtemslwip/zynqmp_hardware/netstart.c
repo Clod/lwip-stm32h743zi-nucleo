@@ -26,7 +26,6 @@
 
 #include <netstart.h>
 #include "netif/xadapter.h"
-#include "xparameters.h"
 #include <lwip/tcpip.h>
 
 int start_networking(

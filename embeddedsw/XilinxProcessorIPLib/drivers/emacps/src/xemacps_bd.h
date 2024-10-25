@@ -60,9 +60,13 @@ extern "C" {
 
 /***************************** Include Files *********************************/
 
+#ifndef __rtems__
 #include <string.h>
 #include "xil_types.h"
 #include "xil_assert.h"
+#else /* __rtems__ */
+#include <xil-compat-lwip.h>
+#endif /* __rtems__ */
 
 /************************** Constant Definitions *****************************/
 

@@ -323,9 +323,13 @@ extern "C" {
 
 /***************************** Include Files ********************************/
 
+#ifndef __rtems__
 #include "xil_types.h"
 #include "xil_assert.h"
 #include "xstatus.h"
+#else /* __rtems__ */
+#include <xil-compat-lwip.h>
+#endif /* __rtems__ */
 #include "xemacps_hw.h"
 #include "xemacps_bd.h"
 #include "xemacps_bdring.h"

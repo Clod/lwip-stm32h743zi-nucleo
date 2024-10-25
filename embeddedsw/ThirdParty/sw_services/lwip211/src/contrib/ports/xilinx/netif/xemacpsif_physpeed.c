@@ -108,13 +108,17 @@
 #include "netif/xemacpsif.h"
 #include "lwipopts.h"
 #include "xparameters_ps.h"
+#ifndef __rtems__
 #include "xparameters.h"
+#endif /* __rtems__ */
 #include "xemac_ieee_reg.h"
 
+#ifndef __rtems__
 #if defined (__aarch64__)
 #include "bspconfig.h"
 #include "xil_smc.h"
 #endif
+#endif /* __rtems__ */
 
 #define PHY_DETECT_REG  						1
 #define PHY_IDENTIFIER_1_REG					2

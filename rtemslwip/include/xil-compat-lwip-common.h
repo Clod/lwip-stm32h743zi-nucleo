@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2022 On-Line Applications Research Corporation (OAR)
- * Written by Kinsey Moore <kinsey.moore@oarcorp.com>
+ * Copyright (C) 2024 On-Line Applications Research Corporation (OAR)
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -24,43 +23,29 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "netif/xtopology.h"
-#include "xparameters_ps.h"
-#include <netif/xemacpsif.h>
+#ifndef _RTEMSLWIP_XIL_COMPAT_LWIP_COMMON_H
+#define _RTEMSLWIP_XIL_COMPAT_LWIP_COMMON_H
 
-struct xtopology_t xtopology[] = {
-  {
-    ZYNQMP_EMACPS_3_BASEADDR,
-    xemac_type_emacps,
-    0x0,
-    0x0,
-    0xF8F00100,
-    XPS_GEM3_INT_ID,
-  },
-  {
-    ZYNQMP_EMACPS_2_BASEADDR,
-    xemac_type_emacps,
-    0x0,
-    0x0,
-    0xF8F00100,
-    XPS_GEM2_INT_ID,
-  },
-  {
-    ZYNQMP_EMACPS_1_BASEADDR,
-    xemac_type_emacps,
-    0x0,
-    0x0,
-    0xF8F00100,
-    XPS_GEM1_INT_ID,
-  },
-  {
-    ZYNQMP_EMACPS_0_BASEADDR,
-    xemac_type_emacps,
-    0x0,
-    0x0,
-    0xF8F00100,
-    XPS_GEM0_INT_ID,
-  },
-};
+#include <bsp/xil-compat.h>
+typedef int32_t XStatus;
+typedef long LONG;
+typedef void (*Xil_InterruptHandler)(void*);
+typedef void (*XInterruptHandler)(void *);
+void Xil_SetTlbAttributes(uintptr_t addr, uint64_t attrib);
+#define print(msg) xil_printf("%s\r\n", msg)
 
-int xtopology_n_emacs = 4;
+#define ULONG64_HI_MASK 0xFFFFFFFF00000000LLU
+#define ULONG64_LO_MASK 0x00000000FFFFFFFFLLU
+
+#define XIL_COMPONENT_IS_STARTED 0x22222222U
+
+#define XST_DEVICE_IS_STOPPED 6L
+#define XST_INVALID_PARAM 15L
+#define XST_IS_STARTED 23L
+#define XST_DMA_SG_IS_STARTED 514L
+#define XST_DMA_SG_IS_STOPPED 515L
+#define XST_DMA_SG_NO_LIST 523L
+#define XST_DMA_SG_LIST_ERROR 526L
+#define XST_EMAC_MII_BUSY 1004L
+
+#endif

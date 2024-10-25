@@ -39,8 +39,12 @@
 
 /***************************** Include Files *********************************/
 
+#ifndef __rtems__
 #include "xstatus.h"
 #include "xil_cache.h"
+#else /* __rtems__ */
+#include <xil-compat-lwip.h>
+#endif /* __rtems__ */
 #include "xemacps_hw.h"
 #include "xemacps_bd.h"
 #include "xemacps_bdring.h"
@@ -227,14 +231,14 @@ LONG XEmacPs_BdRingCreate(XEmacPs_BdRing * RingPtr, UINTPTR PhysAddr,
 	 */
 #ifndef __rtems__
 	(void)memset((void *) VirtAddrLoc, 0, (RingPtr->Separation * BdCount));
-#else
+#else /* __rtems__ */
 	unsigned char* mem = (unsigned char *) VirtAddrLoc;
 	int len = RingPtr->Separation * BdCount;
 	while (len-- > 0) {
 		*mem = 0;
 		mem++;
 	}
-#endif
+#endif /* __rtems__ */
 
 	BdVirtAddr = VirtAddrLoc;
 	BdPhyAddr = PhysAddr + RingPtr->Separation;

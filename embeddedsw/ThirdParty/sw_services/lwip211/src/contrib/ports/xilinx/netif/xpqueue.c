@@ -31,7 +31,11 @@
 #include <stdlib.h>
 
 #include "netif/xpqueue.h"
+#ifndef __rtems__
 #include "xil_printf.h"
+#else /* __rtems__ */
+#include <xil-compat-lwip.h>
+#endif /* __rtems__ */
 
 #define NUM_QUEUES	2
 

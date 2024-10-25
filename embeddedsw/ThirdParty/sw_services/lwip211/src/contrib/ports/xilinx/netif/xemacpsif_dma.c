@@ -35,9 +35,12 @@
 
 #include "netif/xadapter.h"
 #include "netif/xemacpsif.h"
+#ifndef __rtems__
 #include "xstatus.h"
+#endif /* __rtems__ */
 
 #include "xlwipconfig.h"
+#ifndef __rtems__
 #include "xparameters.h"
 #include "xparameters_ps.h"
 #include "xil_exception.h"
@@ -48,6 +51,9 @@
 #ifdef CONFIG_XTRACE
 #include "xtrace.h"
 #endif
+#else /* __rtems__ */
+#include <xil-compat-lwip.h>
+#endif /* __rtems__ */
 #if !NO_SYS
 #include "FreeRTOS.h"
 #include "semphr.h"
@@ -267,7 +273,7 @@ void process_sent_bds(xemacpsif_s *xemacpsif, XEmacPs_BdRing *txring)
 #ifdef __rtems__
 			SYS_ARCH_DECL_PROTECT(lev);
 			SYS_ARCH_PROTECT(lev);
-#endif
+#endif /* __rtems__ */
 			p = (struct pbuf *)tx_pbufs_storage[index + bdindex];
 			if (p != NULL) {
 				pbuf_free(p);
@@ -278,7 +284,7 @@ void process_sent_bds(xemacpsif_s *xemacpsif, XEmacPs_BdRing *txring)
 			tx_pbufs_storage[index + bdindex] = 0;
 #ifdef __rtems__
 			SYS_ARCH_UNPROTECT(lev);
-#endif
+#endif /* __rtems__ */
 			curbdpntr = XEmacPs_BdRingNext(txring, curbdpntr);
 			n_pbufs_freed--;
 			dsb();
@@ -356,12 +362,12 @@ XStatus emacps_sgsend(xemacpsif_s *xemacpsif, struct pbuf *p)
 #ifdef __rtems__
 		SYS_ARCH_DECL_PROTECT(lev);
 		SYS_ARCH_PROTECT(lev);
-#endif
+#endif /* __rtems__ */
 		if (tx_pbufs_storage[index + bdindex] != 0) {
 			LWIP_DEBUGF(NETIF_DEBUG, ("PBUFS not available\r\n"));
 #ifdef __rtems__
 			SYS_ARCH_UNPROTECT(lev);
-#endif
+#endif /* __rtems__ */
 			return XST_FAILURE;
 		}
 
@@ -389,7 +395,7 @@ XStatus emacps_sgsend(xemacpsif_s *xemacpsif, struct pbuf *p)
 		pbuf_ref(q);
 #ifdef __rtems__
 		SYS_ARCH_UNPROTECT(lev);
-#endif
+#endif /* __rtems__ */
 		last_txbd = txbd;
 		XEmacPs_BdClearLast(txbd);
 		txbd = XEmacPs_BdRingNext(txring, txbd);
@@ -508,11 +514,11 @@ void setup_rx_bds(xemacpsif_s *xemacpsif, XEmacPs_BdRing *rxring)
 #ifdef __rtems__
 		SYS_ARCH_DECL_PROTECT(lev);
 		SYS_ARCH_PROTECT(lev);
-#endif
+#endif /* __rtems__ */
 		rx_pbufs_storage[index + bdindex] = (UINTPTR)p;
 #ifdef __rtems__
 		SYS_ARCH_UNPROTECT(lev);
-#endif
+#endif /* __rtems__ */
 	}
 }
 
@@ -563,7 +569,7 @@ void emacps_recv_handler(void *arg)
 #ifdef __rtems__
 			SYS_ARCH_DECL_PROTECT(lev);
 			SYS_ARCH_PROTECT(lev);
-#endif
+#endif /* __rtems__ */
 			p = (struct pbuf *)rx_pbufs_storage[index + bdindex];
 
 #ifdef __rtems__
@@ -578,7 +584,7 @@ void emacps_recv_handler(void *arg)
 			if (p == NULL) {
 				continue;
 			}
-#endif
+#endif /* __rtems__ */
 
 			/*
 			 * Adjust the buffer size to the actual number of bytes received.
@@ -813,11 +819,11 @@ XStatus init_dma(struct xemac_s *xemac)
 #ifdef __rtems__
 		SYS_ARCH_DECL_PROTECT(lev);
 		SYS_ARCH_PROTECT(lev);
-#endif
+#endif /* __rtems__ */
 		rx_pbufs_storage[index + bdindex] = (UINTPTR)p;
 #ifdef __rtems__
 		SYS_ARCH_UNPROTECT(lev);
-#endif
+#endif /* __rtems__ */
 	}
 	XEmacPs_SetQueuePtr(&(xemacpsif->emacps), xemacpsif->emacps.RxBdRing.BaseBdAddr, 0, XEMACPS_RECV);
 	if (gigeversion > 2) {
@@ -917,7 +923,7 @@ void free_txrx_pbufs(xemacpsif_s *xemacpsif)
 #ifdef __rtems__
 		SYS_ARCH_DECL_PROTECT(lev);
 		SYS_ARCH_PROTECT(lev);
-#endif
+#endif /* __rtems__ */
 		if (tx_pbufs_storage[index] != 0) {
 			p = (struct pbuf *)tx_pbufs_storage[index];
 			pbuf_free(p);
@@ -925,7 +931,7 @@ void free_txrx_pbufs(xemacpsif_s *xemacpsif)
 		}
 #ifdef __rtems__
 		SYS_ARCH_UNPROTECT(lev);
-#endif
+#endif /* __rtems__ */
 	}
 
 	index1 = get_base_index_rxpbufsstorage(xemacpsif);
@@ -933,7 +939,7 @@ void free_txrx_pbufs(xemacpsif_s *xemacpsif)
 #ifdef __rtems__
 		SYS_ARCH_DECL_PROTECT(lev);
 		SYS_ARCH_PROTECT(lev);
-#endif
+#endif /* __rtems__ */
 		p = (struct pbuf *)rx_pbufs_storage[index];
 #ifdef __rtems__
 		rx_pbufs_storage[index] = 0;
@@ -941,7 +947,7 @@ void free_txrx_pbufs(xemacpsif_s *xemacpsif)
 		if (p == NULL) {
 			continue;
 		}
-#endif
+#endif /* __rtems__ */
 		pbuf_free(p);
 
 	}
@@ -958,7 +964,7 @@ void free_onlytx_pbufs(xemacpsif_s *xemacpsif)
 #ifdef __rtems__
 		SYS_ARCH_DECL_PROTECT(lev);
 		SYS_ARCH_PROTECT(lev);
-#endif
+#endif /* __rtems__ */
 		if (tx_pbufs_storage[index] != 0) {
 			p = (struct pbuf *)tx_pbufs_storage[index];
 			pbuf_free(p);
@@ -966,7 +972,7 @@ void free_onlytx_pbufs(xemacpsif_s *xemacpsif)
 		}
 #ifdef __rtems__
 		SYS_ARCH_UNPROTECT(lev);
-#endif
+#endif /* __rtems__ */
 	}
 }
 

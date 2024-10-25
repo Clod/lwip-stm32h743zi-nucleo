@@ -187,11 +187,17 @@ extern "C" {
 
 /***************************** Include Files *********************************/
 
+#ifndef __rtems__
 #include "xstatus.h"
 #include "xil_io.h"
+#endif /* __rtems__ */
 #include "xscugic_hw.h"
+#ifndef __rtems__
 #include "xil_exception.h"
 #include "xil_spinlock.h"
+#else /* __rtems__ */
+#include <xil-compat-lwip.h>
+#endif /* __rtems__ */
 
 /************************** Constant Definitions *****************************/
 

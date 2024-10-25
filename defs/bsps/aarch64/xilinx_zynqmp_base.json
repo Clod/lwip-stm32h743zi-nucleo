@@ -21,7 +21,6 @@
 		"embeddedsw/XilinxProcessorIPLib/drivers/emacps/src/xemacps_bdring.c",
 		"embeddedsw/XilinxProcessorIPLib/drivers/emacps/src/xemacps.c",
 		"embeddedsw/XilinxProcessorIPLib/drivers/emacps/src/xemacps_control.c",
-		"embeddedsw/XilinxProcessorIPLib/drivers/emacps/src/xemacps_intr.c",
-		"embeddedsw/lib/bsp/standalone/src/common/xil_assert.c"
+		"embeddedsw/XilinxProcessorIPLib/drivers/emacps/src/xemacps_intr.c"
 	]
 }
