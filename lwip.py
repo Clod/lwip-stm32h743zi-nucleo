@@ -132,6 +132,7 @@ def build(bld):
                 target='networking01.exe',
                 source='rtemslwip/test/networking01/sample_app.c',
                 cflags='-g -Wall -O0',
+                install_path=None,
                 use='lwip',
                 lib=['rtemscpu', 'rtemsbsp', 'rtemstest', 'lwip'],
                 includes=' '.join(test_app_incl))
@@ -147,6 +148,7 @@ def build(bld):
                 source='rtemslwip/test/telnetd01/init.c',
                 use='telnetd lwip rtemstest ftpd',
                 cflags='-g -Wall -O0',
+                install_path=None,
                 includes=' '.join(test_app_incl))
 
 
