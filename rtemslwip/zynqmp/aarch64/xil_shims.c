@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2024 On-Line Applications Research Corporation (OAR)
+ * Copyright (C) 2022 On-Line Applications Research Corporation (OAR)
+ * Written by Kinsey Moore <kinsey.moore@oarcorp.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,14 +24,32 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _RTEMSLWIP_ZYNQMP_XIL_COMPAT_LWIP_H
-#define _RTEMSLWIP_ZYNQMP_XIL_COMPAT_LWIP_H
+#include <libcpu/mmu-vmsav8-64.h>
+#include <stdio.h>
+#include <inttypes.h>
+#include <xil-compat-lwip.h>
 
-#include <xil-compat-lwip-common.h>
+#define TWO_MB (2*1024*1024)
+#define ONE_GB (1024*1024*1024)
 
-#define dsb _AARCH64_Data_synchronization_barrier
-#define INNER_SHAREABLE (0x3 << 8)
-#define NORM_NONCACHE 0x401UL
-
-
-#endif
+/*
+ * When altering memory attributes, Xilinx sets them for differing memory sizes
+ * depending on what area of memory they are in. Any attribute changes below 4GB
+ * apply to 2MB chunks while any changes above 4GB apply to 1GB chunks.
+ */
+void Xil_SetTlbAttributes( UINTPTR Addr, u64 attrib )
+{
+  rtems_status_code sc;
+  sc = aarch64_mmu_map(
+    Addr,
+    Addr < 0x100000000 ? TWO_MB : ONE_GB,
+    attrib
+  );
+  if ( sc == RTEMS_NO_MEMORY ) {
+    printf("Out of memory setting MMU attributes on ptr %p: 0x%" PRIx64 "\n", (void*)Addr, attrib);
+  } else if ( sc == RTEMS_INVALID_ADDRESS ) {
+    printf("Attempted to set MMU attributes on invalid ptr %p: 0x%" PRIx64 "\n", (void*)Addr, attrib);
+  } else if ( sc != RTEMS_SUCCESSFUL ) {
+    printf("Failed setting MMU attributes on ptr %p: 0x%" PRIx64 "\n", (void*)Addr, attrib);
+  }
+}

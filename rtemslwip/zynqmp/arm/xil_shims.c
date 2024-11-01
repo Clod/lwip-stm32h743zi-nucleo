@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 On-Line Applications Research Corporation (OAR)
+ * Copyright (C) 2024 On-Line Applications Research Corporation (OAR)
  * Written by Kinsey Moore <kinsey.moore@oarcorp.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -24,52 +24,23 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <rtems/rtems/intr.h>
-#include <rtems/score/threadimpl.h>
-#include <string.h>
+#include <stdio.h>
+#include <rtems/score/armv7-pmsa.h>
 #include <xil-compat-lwip.h>
 
-#include "FreeRTOS.h"
+#define ONE_MB (1024*1024)
 
 /*
- * XInterruptHandler function pointer signature just happens to exactly match
- * rtems_interrupt_handler
+ * When altering memory attributes, Xilinx sets them for 1MB blocks starting at
+ * the realigned memory address that was provided.
  */
-BaseType_t xPortInstallInterruptHandler(
-  uint8_t           ucInterruptID,
-  XInterruptHandler pxHandler,
-  void             *pvCallBackRef
-)
+void Xil_SetTlbAttributes( uintptr_t Addr, uint32_t attrib )
 {
-  char name[10];
-
-  /* Is this running in the context of any interrupt server tasks? */
-  _Thread_Get_name( _Thread_Get_executing(), name, sizeof( name ) );
-  if (strcmp(name, "IRQS") == 0) {
-    /* Can't run this from within an IRQ Server thread context */
-    return RTEMS_ILLEGAL_ON_SELF;
+  Addr = RTEMS_ALIGN_DOWN(Addr, ONE_MB);
+  uint32_t available_region = _ARMV7_PMSA_Find_available_region();
+  if (available_region == UINT32_MAX) {
+    printf("Out of MPU regionsto set attributes on %p: 0x%x\n", (void*)Addr, attrib);
+    return;
   }
-
-  rtems_status_code sc = rtems_interrupt_server_handler_install(
-    RTEMS_INTERRUPT_SERVER_DEFAULT,
-    ucInterruptID,
-    "CGEM Handler",
-    RTEMS_INTERRUPT_UNIQUE,
-    pxHandler,
-    pvCallBackRef
-  );
-
-  return sc;
-}
-
-/* Enable the interrupt */
-void XScuGic_EnableIntr ( u32 DistBaseAddress, u32 Int_Id )
-{
-  rtems_interrupt_vector_enable( Int_Id );
-}
-
-/* Disable the interrupt */
-void XScuGic_DisableIntr ( u32 DistBaseAddress, u32 Int_Id )
-{
-  rtems_interrupt_vector_disable( Int_Id );
+  (void) _ARMV7_PMSA_Add_regions(available_region, Addr, ONE_MB, attrib);
 }

@@ -1,0 +1,11 @@
+{
+	"includes": [
+		"../zynqmp_base"
+	],
+	"header-paths-to-import": [
+		"rtemslwip/zynqmp/aarch64"
+	],
+	"source-files-to-import": [
+		"rtemslwip/zynqmp/aarch64/xil_shims.c"
+	]
+}

@@ -31,7 +31,6 @@ typedef int32_t XStatus;
 typedef long LONG;
 typedef void (*Xil_InterruptHandler)(void*);
 typedef void (*XInterruptHandler)(void *);
-void Xil_SetTlbAttributes(uintptr_t addr, uint64_t attrib);
 #define print(msg) xil_printf("%s\r\n", msg)
 
 #define ULONG64_HI_MASK 0xFFFFFFFF00000000LLU

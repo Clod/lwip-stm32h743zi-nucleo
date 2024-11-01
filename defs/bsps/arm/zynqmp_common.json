@@ -1,11 +1,11 @@
 {
 	"includes": [
-		"zynqmp_common"
+		"../zynqmp_base"
 	],
 	"header-paths-to-import": [
-		"rtemslwip/zynqmp_cfc400x"
+		"rtemslwip/zynqmp/arm"
 	],
 	"source-files-to-import": [
-		"rtemslwip/zynqmp_cfc400x/netstart.c"
+		"rtemslwip/zynqmp/arm/xil_shims.c"
 	]
 }

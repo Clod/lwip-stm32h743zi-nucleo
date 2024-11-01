@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2022 On-Line Applications Research Corporation (OAR)
- * Written by Kinsey Moore <kinsey.moore@oarcorp.com>
+ * Copyright (C) 2024 On-Line Applications Research Corporation (OAR)
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -24,52 +23,15 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <rtems/rtems/intr.h>
-#include <rtems/score/threadimpl.h>
-#include <string.h>
-#include <xil-compat-lwip.h>
+#ifndef _RTEMSLWIP_ZYNQMP_XIL_COMPAT_LWIP_H
+#define _RTEMSLWIP_ZYNQMP_XIL_COMPAT_LWIP_H
 
-#include "FreeRTOS.h"
+#include <xil-compat-lwip-common.h>
 
-/*
- * XInterruptHandler function pointer signature just happens to exactly match
- * rtems_interrupt_handler
- */
-BaseType_t xPortInstallInterruptHandler(
-  uint8_t           ucInterruptID,
-  XInterruptHandler pxHandler,
-  void             *pvCallBackRef
-)
-{
-  char name[10];
+void Xil_SetTlbAttributes(uintptr_t addr, uint64_t attrib);
+#define dsb _AARCH64_Data_synchronization_barrier
+#define INNER_SHAREABLE (0x3 << 8)
+#define NORM_NONCACHE 0x401UL
 
-  /* Is this running in the context of any interrupt server tasks? */
-  _Thread_Get_name( _Thread_Get_executing(), name, sizeof( name ) );
-  if (strcmp(name, "IRQS") == 0) {
-    /* Can't run this from within an IRQ Server thread context */
-    return RTEMS_ILLEGAL_ON_SELF;
-  }
 
-  rtems_status_code sc = rtems_interrupt_server_handler_install(
-    RTEMS_INTERRUPT_SERVER_DEFAULT,
-    ucInterruptID,
-    "CGEM Handler",
-    RTEMS_INTERRUPT_UNIQUE,
-    pxHandler,
-    pvCallBackRef
-  );
-
-  return sc;
-}
-
-/* Enable the interrupt */
-void XScuGic_EnableIntr ( u32 DistBaseAddress, u32 Int_Id )
-{
-  rtems_interrupt_vector_enable( Int_Id );
-}
-
-/* Disable the interrupt */
-void XScuGic_DisableIntr ( u32 DistBaseAddress, u32 Int_Id )
-{
-  rtems_interrupt_vector_disable( Int_Id );
-}
+#endif

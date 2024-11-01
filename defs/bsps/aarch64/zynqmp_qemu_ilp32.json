@@ -1,6 +1,6 @@
 {
 	"includes": [
-		"xilinx_zynqmp_base",
-		"xilinx_zynqmp_qemu_base"
+		"zynqmp_common",
+		"../zynqmp_qemu_base"
 	]
 }
