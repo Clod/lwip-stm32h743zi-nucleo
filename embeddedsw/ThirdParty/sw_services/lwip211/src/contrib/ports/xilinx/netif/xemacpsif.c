@@ -660,7 +660,7 @@ static err_t xemacpsif_mld6_mac_filter_update (struct netif *netif,
 static void xemacpsif_mac_hash_update (struct netif *netif, u8_t *ip_addr,
 		u8_t action)
 #else /* __rtems__ */
-static void xemacpsif_mac_hash_update (struct netif *netif, u8_t *ip4_addr_t,
+static void xemacpsif_mac_hash_update (struct netif *netif, u8_t *ip_addr,
 		enum netif_mac_filter_action action)
 #endif /* __rtems__ */
 {
@@ -705,8 +705,13 @@ static void xemacpsif_mac_hash_update (struct netif *netif, u8_t *ip4_addr_t,
 	SYS_ARCH_UNPROTECT(lev);
 }
 
+#ifndef __rtems__
 static err_t xemacpsif_mac_filter_update (struct netif *netif, ip_addr_t *group,
 		u8_t action)
+#else
+static err_t xemacpsif_mac_filter_update (struct netif *netif, const ip4_addr_t *group,
+		enum netif_mac_filter_action action)
+#endif
 {
 	u8_t temp_mask;
 	unsigned int i;
