@@ -4,8 +4,5 @@
 	],
 	"header-paths-to-import": [
 		"rtemslwip/zynqmp_cfc400x"
-	],
-	"source-files-to-import": [
-		"rtemslwip/zynqmp_cfc400x/netstart.c"
 	]
 }
