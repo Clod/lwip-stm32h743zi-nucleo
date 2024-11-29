@@ -32,4 +32,8 @@
 /* Use SGMII mode for all interfaces on the CFC-400X */
 #define ZYNQMP_USE_SGMII
 
+#ifndef ZYNQMP_DEFAULT_INTERFACE
+#define ZYNQMP_DEFAULT_INTERFACE XPAR_PSU_ETHERNET_0_BASEADDR
+#endif
+
 #endif /* RTEMSLWIP_LWIPBSPOPTS_H */

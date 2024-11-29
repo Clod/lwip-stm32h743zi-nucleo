@@ -1,8 +1,5 @@
 {
 	"header-paths-to-import": [
 		"rtemslwip/zynqmp_qemu"
-	],
-	"source-files-to-import": [
-		"rtemslwip/zynqmp_qemu/netstart.c"
 	]
 }

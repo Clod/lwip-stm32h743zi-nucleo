@@ -9,6 +9,7 @@
 		"embeddedsw/lib/bsp/standalone/src/arm/ARMv8/64bit"
 	],
 	"source-files-to-import": [
+		"rtemslwip/zynqmp/netstart.c",
 		"rtemslwip/zynqmp/xemacps_g.c",
 		"rtemslwip/zynqmp/xil_shims.c",
 		"rtemslwip/zynqmp/xtopology_g.c",

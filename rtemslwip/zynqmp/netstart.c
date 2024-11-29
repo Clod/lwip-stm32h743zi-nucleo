@@ -45,7 +45,7 @@ int start_networking(
     netmask,
     gateway,
     mac_ethernet_address,
-    XPAR_PSU_ETHERNET_3_BASEADDR
+    ZYNQMP_DEFAULT_INTERFACE
        ) ) {
     return 1;
   }
