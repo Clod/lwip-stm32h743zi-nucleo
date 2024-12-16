@@ -40,7 +40,7 @@ import os
 import sys
 top = '.'
 
-rtems_version = "6"
+rtems_version = "7"
 try:
     import rtems_waf.rtems as rtems
 except rtems_waf.DoesNotExist:
