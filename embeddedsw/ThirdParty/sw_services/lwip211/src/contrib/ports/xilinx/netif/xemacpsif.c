@@ -67,24 +67,24 @@
 static err_t xemacpsif_mac_filter_update (struct netif *netif,
 #ifndef __rtems__
 							ip_addr_t *group, u8_t action);
+
+static u8_t xemacps_mcast_entry_mask = 0;
 #else /* __rtems__ */
 							const ip4_addr_t *group,
 							enum netif_mac_filter_action action);
 #endif /* __rtems__ */
-
-static u8_t xemacps_mcast_entry_mask = 0;
 #endif
 
 #if LWIP_IPV6 && LWIP_IPV6_MLD
 static err_t xemacpsif_mld6_mac_filter_update (struct netif *netif,
 #ifndef __rtems__
 							ip_addr_t *group, u8_t action);
+
+static u8_t xemacps_mld6_mcast_entry_mask;
 #else /* __rtems__ */
 							const ip6_addr_t *group,
 							enum netif_mac_filter_action action);
 #endif /* __rtems__ */
-
-static u8_t xemacps_mld6_mcast_entry_mask;
 #endif
 
 XEmacPs_Config *mac_config;
@@ -586,14 +586,15 @@ static void xemacpsif_mld6_mac_hash_update (struct netif *netif, u8_t *ip_addr,
 #ifndef __rtems__
 static err_t xemacpsif_mld6_mac_filter_update (struct netif *netif, ip_addr_t *group,
 		u8_t action)
+{
+	u8_t temp_mask;
+	unsigned int i;
 #else /* __rtems__ */
 static err_t xemacpsif_mld6_mac_filter_update (struct netif *netif,
 							const ip6_addr_t *group,
 							enum netif_mac_filter_action action)
-#endif /* __rtems__ */
 {
-	u8_t temp_mask;
-	unsigned int i;
+#endif /* __rtems__ */
 	u8_t * ip_addr = (u8_t *) group;
 
 #ifndef __rtems__
@@ -607,12 +608,14 @@ static err_t xemacpsif_mld6_mac_filter_update (struct netif *netif,
                         return ERR_ARG;
 	}
 	if (action == NETIF_ADD_MAC_FILTER) {
+#ifndef __rtems__
 		for (i = 0; i < XEMACPS_MAX_MAC_ADDR; i++) {
 			temp_mask = (0x01) << i;
 			if ((xemacps_mld6_mcast_entry_mask & temp_mask) == temp_mask) {
 				continue;
 			}
 			xemacps_mld6_mcast_entry_mask |= temp_mask;
+#endif
 
 			/* Update mac address in hash table */
 			xemacpsif_mld6_mac_hash_update(netif, ip_addr, action);
@@ -621,19 +624,23 @@ static err_t xemacpsif_mld6_mac_filter_update (struct netif *netif,
 					("%s: Multicast MAC address successfully added.\r\n", __func__));
 
 			return ERR_OK;
+#ifndef __rtems__
 		}
 		LWIP_DEBUGF(NETIF_DEBUG,
 				("%s: No multicast address registers left.\r\n", __func__));
 		LWIP_DEBUGF(NETIF_DEBUG,
 				("Multicast MAC address add operation failure !!\r\n"));
 		return ERR_MEM;
+#endif
 	} else if (action == NETIF_DEL_MAC_FILTER) {
+#ifndef __rtems__
 		for (i = 0; i < XEMACPS_MAX_MAC_ADDR; i++) {
 			temp_mask = (0x01) << i;
 			if ((xemacps_mld6_mcast_entry_mask & temp_mask) != temp_mask) {
 				continue;
 			}
 			xemacps_mld6_mcast_entry_mask &= (~temp_mask);
+#endif
 
 			/* Update mac address in hash table */
 			xemacpsif_mld6_mac_hash_update(netif, ip_addr, action);
@@ -642,6 +649,7 @@ static err_t xemacpsif_mld6_mac_filter_update (struct netif *netif,
 					("%s: Multicast MAC address successfully removed.\r\n", __func__));
 
 			return ERR_OK;
+#ifndef __rtems__
 		}
 		LWIP_DEBUGF(NETIF_DEBUG,
 				("%s: No multicast address registers present with\r\n", __func__));
@@ -650,6 +658,7 @@ static err_t xemacpsif_mld6_mac_filter_update (struct netif *netif,
 		LWIP_DEBUGF(NETIF_DEBUG,
 				("Multicast MAC address removal failure!!.\r\n"));
 		return ERR_MEM;
+#endif
 	}
 	return ERR_ARG;
 }
@@ -708,13 +717,14 @@ static void xemacpsif_mac_hash_update (struct netif *netif, u8_t *ip_addr,
 #ifndef __rtems__
 static err_t xemacpsif_mac_filter_update (struct netif *netif, ip_addr_t *group,
 		u8_t action)
-#else
-static err_t xemacpsif_mac_filter_update (struct netif *netif, const ip4_addr_t *group,
-		enum netif_mac_filter_action action)
-#endif
 {
 	u8_t temp_mask;
 	unsigned int i;
+#else
+static err_t xemacpsif_mac_filter_update (struct netif *netif, const ip4_addr_t *group,
+		enum netif_mac_filter_action action)
+{
+#endif
 	u8_t * ip_addr = (u8_t *) group;
 
 	if ((ip_addr[0] < 224) && (ip_addr[0] > 239)) {
@@ -728,12 +738,14 @@ static err_t xemacpsif_mac_filter_update (struct netif *netif, const ip4_addr_t 
 
 	if (action == IGMP_ADD_MAC_FILTER) {
 
+#ifndef __rtems__
 		for (i = 0; i < XEMACPS_MAX_MAC_ADDR; i++) {
 			temp_mask = (0x01) << i;
 			if ((xemacps_mcast_entry_mask & temp_mask) == temp_mask) {
 				continue;
 			}
 			xemacps_mcast_entry_mask |= temp_mask;
+#endif
 
 			/* Update mac address in hash table */
 			xemacpsif_mac_hash_update(netif, ip_addr, action);
@@ -742,6 +754,7 @@ static err_t xemacpsif_mac_filter_update (struct netif *netif, const ip4_addr_t 
 					("%s: Multicast MAC address successfully added.\r\n", __func__));
 
 			return ERR_OK;
+#ifndef __rtems__
 		}
 		if (i == XEMACPS_MAX_MAC_ADDR) {
 			LWIP_DEBUGF(NETIF_DEBUG,
@@ -751,13 +764,16 @@ static err_t xemacpsif_mac_filter_update (struct netif *netif, const ip4_addr_t 
 
 			return ERR_MEM;
 		}
+#endif
 	} else if (action == IGMP_DEL_MAC_FILTER) {
+#ifndef __rtems__
 		for (i = 0; i < XEMACPS_MAX_MAC_ADDR; i++) {
 			temp_mask = (0x01) << i;
 			if ((xemacps_mcast_entry_mask & temp_mask) != temp_mask) {
 				continue;
 			}
 			xemacps_mcast_entry_mask &= (~temp_mask);
+#endif
 
 			/* Update mac address in hash table */
 			xemacpsif_mac_hash_update(netif, ip_addr, action);
@@ -766,6 +782,7 @@ static err_t xemacpsif_mac_filter_update (struct netif *netif, const ip4_addr_t 
 					("%s: Multicast MAC address successfully removed.\r\n", __func__));
 
 			return ERR_OK;
+#ifndef __rtems__
 		}
 		if (i == XEMACPS_MAX_MAC_ADDR) {
 			LWIP_DEBUGF(NETIF_DEBUG,
@@ -777,6 +794,7 @@ static err_t xemacpsif_mac_filter_update (struct netif *netif, const ip4_addr_t 
 
 			return ERR_MEM;
 		}
+#endif
 	}
 	return ERR_OK;
 }
