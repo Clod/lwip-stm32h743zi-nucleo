@@ -34,7 +34,9 @@ int start_networking(
   unsigned char *mac_ethernet_address
 )
 {
-  start_networking_shared();
+  if (start_networking_shared()) {
+    return 1;
+  }
 
   return 0;
 }

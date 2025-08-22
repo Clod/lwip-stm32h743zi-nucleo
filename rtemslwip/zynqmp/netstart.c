@@ -37,7 +37,9 @@ int start_networking(
 )
 {
   cpu_set_t set;
-  start_networking_shared();
+  if (start_networking_shared()) {
+    return 1;
+  }
 
   if ( !xemac_add(
     net_interface,
