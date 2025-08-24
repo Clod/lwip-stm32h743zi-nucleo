@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2022 On-Line Applications Research Corporation (OAR)
- * Written by Kinsey Moore <kinsey.moore@oarcorp.com>
+ * Copyright (C) 2024 Bernd Moessner
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -24,42 +23,25 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <netstart.h>
-#include "netif/xadapter.h"
-#include <lwip/tcpip.h>
+#include "netif/xtopology.h"
 
-int start_networking(
-  struct netif  *net_interface,
-  ip_addr_t     *ipaddr,
-  ip_addr_t     *netmask,
-  ip_addr_t     *gateway,
-  unsigned char *mac_ethernet_address
-)
-{
-  start_networking_shared();
+struct xtopology_t xtopology[] = {
+  {
+    0xE000B000,
+    xemac_type_emacps,
+    0x0,
+    0x0,
+    0xF8F00100,
+    0x36,
+  },
+  {
+    0xE000C000,
+    xemac_type_emacps,
+    0x0,
+    0x0,
+    0xF8F00100,
+    0x4D,
+  },
+};
 
-  if ( !xemac_add(
-    net_interface,
-    ipaddr,
-    netmask,
-    gateway,
-    mac_ethernet_address,
-    XPAR_PS7_ETHERNET_0_BASEADDR
-       ) ) {
-    return 1;
-  }
-
-  netif_set_default( net_interface );
-
-  netif_set_up( net_interface );
-
-  sys_thread_new(
-    "xemacif_input_thread",
-    ( void ( * )( void * ) )xemacif_input_thread,
-    net_interface,
-    1024,
-    DEFAULT_THREAD_PRIO
-  );
-
-  return 0;
-}
+int xtopology_n_emacs = 2;
