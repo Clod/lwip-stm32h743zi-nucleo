@@ -130,6 +130,44 @@ static void test(void)
   puts("get node and service with maximum number of characters for IP");
   fill_sa_in(&sa_in, ip2_num, port2_num);
   test_getnameinfo(sa_in_p, 0, true, true, 0, ip2_string, port2_string);
+
+  puts("test [get,set]hostid");
+  rtems_test_assert(0 == gethostid());
+  sethostid(5);
+  rtems_test_assert(5 == gethostid());
+
+  puts("test [get,set]hostname");
+  char *newhostname = "newhostname";
+  char buf[255];
+  int ret;
+  /* successful call, hostname starts empty */
+  ret = gethostname(buf, 255);
+  rtems_test_assert(0 == ret);
+  rtems_test_assert(0 == strcmp(buf, ""));
+  /* failed call, buffer too short */
+  ret = gethostname(buf, 0);
+  rtems_test_assert(-1 == ret);
+  rtems_test_assert(ENAMETOOLONG == errno);
+  /* failed call, buffer null */
+  ret = gethostname(NULL, 255);
+  rtems_test_assert(-1 == ret);
+  rtems_test_assert(EFAULT == errno);
+  /* failed call, buffer null */
+  ret = sethostname(NULL, 255);
+  rtems_test_assert(-1 == ret);
+  rtems_test_assert(EFAULT == errno);
+  /* successful call, set hostname */
+  ret = sethostname(newhostname, strlen(newhostname) + 1);
+  rtems_test_assert(0 == ret);
+  /* successful call, verify new hostname */
+  ret = gethostname(buf, 255);
+  rtems_test_assert(0 == ret);
+  rtems_test_assert(0 == strcmp(buf, newhostname));
+  /* failed call, too long */
+  ret = sethostname(newhostname, 256);
+  rtems_test_assert(-1 == ret);
+  rtems_test_assert(EINVAL == errno);
+
 }
 
 static rtems_task Init(rtems_task_argument argument)

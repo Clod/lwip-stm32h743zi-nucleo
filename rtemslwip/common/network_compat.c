@@ -25,12 +25,14 @@
  */
 
 #include <sys/socket.h>
+#include <sys/unistd.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <lwip/ip4_addr.h>
 #include <lwip/ip6_addr.h>
 #include <lwip/sockets.h>
 #include <lwip/netdb.h>
+#include <unistd.h>
 
 in_addr_t inet_addr(const char *cp)
 {
@@ -94,6 +96,69 @@ getnameinfo(const struct sockaddr *sa, socklen_t salen, char *node,
             return EAI_OVERFLOW;
         }
     }
+
+    return 0;
+}
+
+static long hostid = 0;
+
+long gethostid(void)
+{
+    return hostid;
+}
+
+int sethostid(long new_hostid)
+{
+    hostid = new_hostid;
+    return 0;
+}
+
+static char hostname[_POSIX_HOST_NAME_MAX] = {0};
+static int hostname_len = 1;
+
+int gethostname(char *name, size_t size)
+{
+    int copy_size = hostname_len;
+
+    if (name == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (size == 0) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    if (copy_size >= size) {
+        /* Ensure space for the null */
+        copy_size = size - 1;
+    }
+
+    memcpy(name, hostname, copy_size);
+    /* Enforce null termination of output */
+    name[copy_size] = '\0';
+
+    if (size <= hostname_len) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    return 0;
+}
+
+int sethostname(const char *name, size_t size)
+{
+    if (name == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    if (size > _POSIX_HOST_NAME_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memcpy(hostname, name, size);
+    hostname_len = size;
 
     return 0;
 }
