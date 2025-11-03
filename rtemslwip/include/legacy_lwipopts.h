@@ -44,7 +44,7 @@
 /*****************************************************************************
 **                          Memory Options
 *****************************************************************************/
-#define MEM_ALIGNMENT 4
+#define MEM_ALIGNMENT __SIZEOF_POINTER__
 #define MEM_SIZE (1024 * 1024) /* 4K */
 #define MEMP_NUM_TCP_SEG 32
 #define MEMP_MEM_MALLOC 1
