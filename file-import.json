@@ -37,6 +37,7 @@
     "src/core/ipv4/igmp.c",
     "src/core/ipv4/etharp.c",
     "src/core/ipv4/dhcp.c",
+    "src/core/ipv4/acd.c",
     "src/api/sockets.c",
     "src/api/netdb.c",
     "src/api/netbuf.c",
