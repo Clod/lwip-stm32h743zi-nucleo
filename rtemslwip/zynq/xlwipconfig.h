@@ -27,10 +27,18 @@
 #ifndef __XLWIPCONFIG_H_
 #define __XLWIPCONFIG_H_
 
+#include <lwipconfig.h>
+
 #define XLWIP_CONFIG_INCLUDE_GEM 1
 #define XLWIP_CONFIG_EMAC_NUMBER 0
+
+#ifndef XLWIP_CONFIG_N_TX_DESC
 #define XLWIP_CONFIG_N_TX_DESC 64
+#endif
+
+#ifndef XLWIP_CONFIG_N_RX_DESC
 #define XLWIP_CONFIG_N_RX_DESC 64
+#endif
 
 #define XLWIP_CONFIG_N_TX_COALESCE 1
 #define XLWIP_CONFIG_N_RX_COALESCE 1
