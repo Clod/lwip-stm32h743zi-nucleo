@@ -96,8 +96,8 @@
 #define DEFAULT_UDP_RECVMBOX_SIZE 20
 #endif
 
-#ifndef DHCP_DOES_ARP_CHECK
-#define DHCP_DOES_ARP_CHECK 1
+#ifndef LWIP_DHCP_DOES_ACD_CHECK
+#define LWIP_DHCP_DOES_ACD_CHECK 1
 #endif
 
 #ifndef ICMP_TTL
