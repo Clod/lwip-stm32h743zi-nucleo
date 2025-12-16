@@ -689,6 +689,11 @@ u32 XEmacPs_BdRingFromHwTx(XEmacPs_BdRing * RingPtr, u32 BdLimit,
 
 		/* Move on to next BD in work group */
 		CurBdPtr = XEmacPs_BdRingNext(RingPtr, CurBdPtr);
+#ifdef __rtems__
+		if (CurBdPtr == RingPtr->HwTail) {
+			break;
+		}
+#endif
 	}
 
 	/* Subtract off any partial packet BDs found */
@@ -828,6 +833,11 @@ u32 XEmacPs_BdRingFromHwRx(XEmacPs_BdRing * RingPtr, u32 BdLimit,
 
 		/* Move on to next BD in work group */
 		CurBdPtr = XEmacPs_BdRingNext(RingPtr, CurBdPtr);
+#ifdef __rtems__
+		if (CurBdPtr == RingPtr->HwTail) {
+			break;
+		}
+#endif
 	}
 
 	/* Subtract off any partial packet BDs found */
