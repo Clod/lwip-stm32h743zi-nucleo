@@ -806,11 +806,14 @@ int32_t ETH_PHY_IO_ReadReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t *pRegVal
   */
 int32_t ETH_PHY_IO_WriteReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t RegVal)
 {
+  printf("PHY_WriteReg: DevAddr=%lu, RegAddr=%lu, RegVal=0x%08lx\n", 
+         (unsigned long)DevAddr, (unsigned long)RegAddr, (unsigned long)RegVal);
   if(HAL_ETH_WritePHYRegister(&heth, DevAddr, RegAddr, RegVal) != HAL_OK)
   {
+    printf("PHY_WriteReg: FAILED\n");
     return -1;
   }
-
+  printf("PHY_WriteReg: SUCCESS\n");
   return 0;
 }
 
@@ -820,7 +823,9 @@ int32_t ETH_PHY_IO_WriteReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t RegVal)
   */
 int32_t ETH_PHY_IO_GetTick(void)
 {
-  return HAL_GetTick();
+  uint32_t tick = HAL_GetTick();
+  printf("PHY_GetTick: returned %lu\n", (unsigned long)tick);
+  return tick;
 }
 
 /**
