@@ -34,29 +34,29 @@ static rtems_task Init(rtems_task_argument argument)
 
   tcpip_init(NULL, NULL);
 
-  IP4_ADDR(&ipaddr, 192, 168, 0, 10);
+  IP4_ADDR(&ipaddr, 192, 168, 1, 10);
   IP4_ADDR(&netmask, 255, 255, 255, 0);
-  IP4_ADDR(&gw, 192, 168, 0, 1);
+  IP4_ADDR(&gw, 192, 168, 1, 1);
 
   netif_add(&netif, &ipaddr, &netmask, &gw, NULL, ethernetif_init, tcpip_input);
   netif_set_default(&netif);
-  // netif_set_up(&netif); // The link thread will do this
 
   printf("Waiting for Ethernet link to come up...\n");
   while (!netif_is_link_up(&netif)) {
     rtems_task_wake_after(RTEMS_MILLISECONDS_TO_TICKS(500));
   }
 
-  printf("Interface up, starting lwiperf server...\n");
+  printf("Interface is UP. IP: 192.168.1.10\n");
+  printf("Starting lwiperf server on port 5001...\n");
 
   LOCK_TCPIP_CORE();
   lwiperf_start_tcp_server_default(lwiperf_report, NULL);
   UNLOCK_TCPIP_CORE();
 
-  printf("lwiperf server started on port 5001\n");
-
+  extern __IO uint32_t EthIrqCount;
   while(1) {
-    rtems_task_wake_after(RTEMS_MILLISECONDS_TO_TICKS(1000));
+    printf("Heartbeat: IP 192.168.1.10, IRQs: %lu\n", (unsigned long)EthIrqCount);
+    rtems_task_wake_after(RTEMS_MILLISECONDS_TO_TICKS(2000));
   }
 
   rtems_task_exit();

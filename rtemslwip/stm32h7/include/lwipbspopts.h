@@ -6,4 +6,11 @@
 #define MEM_SIZE (256 * 1024)
 #define PBUF_POOL_SIZE 64
 
+#define LWIP_DEBUG 1
+#define IP_DEBUG LWIP_DBG_ON
+#define ETHARP_DEBUG LWIP_DBG_ON
+#define ICMP_DEBUG LWIP_DBG_ON
+#define UDP_DEBUG LWIP_DBG_ON
+#define TCP_DEBUG LWIP_DBG_ON
+
 #endif /* __LWIPBSPOPTS_H__ */

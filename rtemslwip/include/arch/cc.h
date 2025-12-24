@@ -138,29 +138,16 @@ typedef u32_t               mem_ptr_t;
 //#ifdef LWIP_DEBUG
 
 
-#define LWIP_PLATFORM_DIAG(expr)        printk expr
+#define LWIP_PLATFORM_DIAG(expr)        printf expr
 
-//#else
-//#define LWIP_PLATFORM_DIAG(expr)
-//#endif
-
-//#define DEBUG
+#define DEBUG
 #ifdef DEBUG
 
 /* for passing arguments to print function */
 #define CC_ASSERT(message, assertion) do { if (!(assertion)) \
 					     LWIP_PLATFORM_DIAG(message); } while (0)
 
-//extern void __error__(char *pcFilename, unsigned long ulLine);
-#define LWIP_PLATFORM_ASSERT(expr)      printk((const char *)expr)
-/*
-{                                       \
-    if(!(expr))                         \
-    {                                   \
-        __error__(__FILE__, __LINE__);  \
-    }                                   \
-}
-*/
+#define LWIP_PLATFORM_ASSERT(expr)      printf("ASSERT: %s\n", (const char *)expr)
 #else
 #define LWIP_PLATFORM_ASSERT(expr)
 #define CC_ASSERT(message, assertion)

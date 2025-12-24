@@ -128,6 +128,8 @@ __IO uint32_t RxPkt = 0;
 ETH_DMADescTypeDef *DMARxDscrTab = (ETH_DMADescTypeDef *)0x30040000; /* Ethernet Rx DMA Descriptors */
 ETH_DMADescTypeDef *DMATxDscrTab = (ETH_DMADescTypeDef *)0x30040200; /* Ethernet Tx DMA Descriptors */
 
+__IO uint32_t EthIrqCount = 0;
+
 /* USER CODE END 2 */
 
 sys_sem_t RxPktSemaphore;   /* Semaphore to signal incoming packets */
@@ -161,6 +163,7 @@ void pbuf_free_custom(struct pbuf *p);
 
 static void stm32h7_eth_interrupt_handler(void *arg)
 {
+  EthIrqCount++;
   HAL_ETH_IRQHandler(&heth);
 }
 
@@ -237,6 +240,9 @@ static void low_level_init(struct netif *netif)
   
   HAL_NVIC_SetPriority(ETH_IRQn, 0x7, 0);
   HAL_NVIC_EnableIRQ(ETH_IRQn);
+
+  printf("Ethernet MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+         MACAddr[0], MACAddr[1], MACAddr[2], MACAddr[3], MACAddr[4], MACAddr[5]);
 
   hal_eth_init_status = HAL_ETH_Init(&heth);
   
@@ -432,6 +438,8 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
     SCB_CleanDCache_by_Addr((uint32_t *)q->payload, q->len);
   }
 
+  printf("TX: %u bytes\n", (unsigned int)p->tot_len);
+
   HAL_ETH_Transmit_IT(&heth, &TxConfig);
   sys_arch_sem_wait(&TxPktSemaphore, TIME_WAITING_FOR_INPUT);
 
@@ -483,6 +491,7 @@ void ethernetif_input(void* argument)
         p = low_level_input( netif );
         if (p != NULL)
         {
+          printf("RX: %u bytes\n", (unsigned int)p->tot_len);
           if (netif->input( p, netif) != ERR_OK )
           {
             pbuf_free(p);
@@ -979,26 +988,29 @@ static void MPU_Config(void)
 
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
-  /** Initializes and configures the Region and the memory to be protected
+  /** Region 1: RX Buffers (D2 SRAM) - Non-cacheable, Non-bufferable
   */
   MPU_InitStruct.Number = MPU_REGION_NUMBER1;
   MPU_InitStruct.BaseAddress = 0x30020000;
   MPU_InitStruct.Size = MPU_REGION_SIZE_128KB;
   MPU_InitStruct.SubRegionDisable = 0x0;
-  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0; // Changed to TEX 0 for simpler mapping
   MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
-  MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
 
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
-  /** Initializes and configures the Region and the memory to be protected
+  /** Region 2: Descriptors (D2 SRAM) - Non-cacheable, Non-bufferable
   */
   MPU_InitStruct.Number = MPU_REGION_NUMBER2;
   MPU_InitStruct.BaseAddress = 0x30040000;
   MPU_InitStruct.Size = MPU_REGION_SIZE_512B;
   MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
   MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
-  MPU_InitStruct.IsBufferable = MPU_ACCESS_BUFFERABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
 
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
   /* Enables the MPU */
