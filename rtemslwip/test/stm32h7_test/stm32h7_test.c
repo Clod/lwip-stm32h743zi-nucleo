@@ -54,8 +54,10 @@ static rtems_task Init(rtems_task_argument argument)
   UNLOCK_TCPIP_CORE();
 
   extern __IO uint32_t EthIrqCount;
+  extern __IO uint32_t RxIrqCount;
   while(1) {
-    printf("Heartbeat: IP 192.168.1.10, IRQs: %lu\n", (unsigned long)EthIrqCount);
+    printf("Heartbeat: Total IRQs: %lu, RX Cplt: %lu\n", 
+           (unsigned long)EthIrqCount, (unsigned long)RxIrqCount);
     rtems_task_wake_after(RTEMS_MILLISECONDS_TO_TICKS(2000));
   }
 

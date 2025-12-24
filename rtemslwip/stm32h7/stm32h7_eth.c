@@ -129,6 +129,7 @@ ETH_DMADescTypeDef *DMARxDscrTab = (ETH_DMADescTypeDef *)0x30040000; /* Ethernet
 ETH_DMADescTypeDef *DMATxDscrTab = (ETH_DMADescTypeDef *)0x30040200; /* Ethernet Tx DMA Descriptors */
 
 __IO uint32_t EthIrqCount = 0;
+__IO uint32_t RxIrqCount = 0;
 
 /* USER CODE END 2 */
 
@@ -174,6 +175,7 @@ static void stm32h7_eth_interrupt_handler(void *arg)
   */
 void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *handlerEth)
 {
+  RxIrqCount++;
   sys_sem_signal(&RxPktSemaphore);
 }
 /**
@@ -339,104 +341,11 @@ static void low_level_init(struct netif *netif)
   printf("After 100ms delay, HAL_GetTick: %lu\n", (unsigned long)HAL_GetTick());
   
   /* Set PHY IO functions  */
-  LAN8742.DevAddr = 0;  /* Will be determined by LAN8742_Init */
-  LAN8742.Is_Initialized = 0;
-  
-  printf("Calling LAN8742_RegisterBusIO...\n");
-  int32_t reg_status = LAN8742_RegisterBusIO(&LAN8742, &LAN8742_IOCtx);
-  printf("RegisterBusIO returned: %ld\n", (long)reg_status);
-
-  printf("Initializing PHY manually (avoiding busy-wait)...\n");
-  /* Manual PHY initialization to avoid the 2-second busy-wait in LAN8742_Init */
-  
-  /* Set DevAddr to 0 (the LAN8742 on Nucleo-H743ZI) */
   LAN8742.DevAddr = 0;
   LAN8742.Is_Initialized = 0;
-  
-  /* Verify PHY is present by reading the ID register */
-  uint32_t phy_id = 0;
-  if (ETH_PHY_IO_ReadReg(0, 18, &phy_id) == 0) {
-    printf("PHY ID register = 0x%08lx\n", (unsigned long)phy_id);
-  }
-  
-  /* Perform soft reset */
-  printf("Performing PHY soft reset...\n");
-  ETH_PHY_IO_WriteReg(0, 0, 0x8000);  /* LAN8742_BCR_SOFT_RESET */
-  
-  /* Wait for reset to complete (with RTEMS-friendly delay) */
-  uint32_t reset_start = HAL_GetTick();
-  uint32_t reg_val = 0x8000;
-  while (reg_val & 0x8000) {
-    if ((HAL_GetTick() - reset_start) > 500) {
-      printf("PHY reset timeout!\n");
-      break;
-    }
-    rtems_task_wake_after(RTEMS_MILLISECONDS_TO_TICKS(10));
-    ETH_PHY_IO_ReadReg(0, 0, &reg_val);
-  }
-  printf("PHY reset complete\n");
-  
-  /* Enable auto-negotiation */
-  ETH_PHY_IO_WriteReg(0, 0, 0x1000);  /* LAN8742_BCR_AUTONEGO_EN */
-  
-  LAN8742.Is_Initialized = 1;
-  printf("PHY manual init complete, DevAddr=%lu\n", (unsigned long)LAN8742.DevAddr);
+  LAN8742_RegisterBusIO(&LAN8742, &LAN8742_IOCtx);
 
-  printf("Checking ETH init status...\n");
-  if (hal_eth_init_status == HAL_OK)
-  {
-    printf("Getting PHY link state...\n");
-    PHYLinkState = LAN8742_GetLinkState(&LAN8742);
-
-    /* Get link state */
-    if(PHYLinkState <= LAN8742_STATUS_LINK_DOWN)
-    {
-      netif_set_link_down(netif);
-      netif_set_down(netif);
-    }
-    else
-    {
-      switch (PHYLinkState)
-      {
-      case LAN8742_STATUS_100MBITS_FULLDUPLEX:
-        duplex = ETH_FULLDUPLEX_MODE;
-        speed = ETH_SPEED_100M;
-        break;
-      case LAN8742_STATUS_100MBITS_HALFDUPLEX:
-        duplex = ETH_HALFDUPLEX_MODE;
-        speed = ETH_SPEED_100M;
-        break;
-      case LAN8742_STATUS_10MBITS_FULLDUPLEX:
-        duplex = ETH_FULLDUPLEX_MODE;
-        speed = ETH_SPEED_10M;
-        break;
-      case LAN8742_STATUS_10MBITS_HALFDUPLEX:
-        duplex = ETH_HALFDUPLEX_MODE;
-        speed = ETH_SPEED_10M;
-        break;
-      default:
-        duplex = ETH_FULLDUPLEX_MODE;
-        speed = ETH_SPEED_100M;
-        break;
-      }
-
-    /* Get MAC Config MAC */
-    HAL_ETH_GetMACConfig(&heth, &MACConf);
-    MACConf.DuplexMode = duplex;
-    MACConf.Speed = speed;
-    HAL_ETH_SetMACConfig(&heth, &MACConf);
-
-    HAL_ETH_Start_IT(&heth);
-    netif_set_up(netif);
-    netif_set_link_up(netif);
-
-/* USER CODE BEGIN PHY_POST_CONFIG */
-
-/* USER CODE END PHY_POST_CONFIG */
-    }
-
-  }
-  else
+  if (hal_eth_init_status != HAL_OK)
   {
     Error_Handler();
   }
@@ -444,12 +353,10 @@ static void low_level_init(struct netif *netif)
 
 /* USER CODE BEGIN LOW_LEVEL_INIT */
   
-  /* Now that hardware is fully initialized, create the Ethernet threads */
-  printf("Creating Ethernet threads (after PHY init)...\n");
+  /* Create the Ethernet threads. Hardware will be started by EthLink thread. */
+  printf("Creating Ethernet threads...\n");
   sys_thread_new("EthIf", ethernetif_input, netif, INTERFACE_THREAD_STACK_SIZE, TCPIP_THREAD_PRIO);
-  printf("EthIf thread created\n");
   sys_thread_new("EthLink", ethernet_link_thread, netif, INTERFACE_THREAD_STACK_SIZE, TCPIP_THREAD_PRIO);
-  printf("EthLink thread created\n");
 
 /* USER CODE END LOW_LEVEL_INIT */
 }
@@ -826,14 +733,11 @@ int32_t ETH_PHY_IO_DeInit (void)
   */
 int32_t ETH_PHY_IO_ReadReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t *pRegVal)
 {
-  printf("PHY_ReadReg: DevAddr=%lu, RegAddr=%lu, heth=0x%p\n", 
-         (unsigned long)DevAddr, (unsigned long)RegAddr, &heth);
   if(HAL_ETH_ReadPHYRegister(&heth, DevAddr, RegAddr, pRegVal) != HAL_OK)
   {
-    printf("PHY_ReadReg: FAILED\n");
     return -1;
   }
-  printf("PHY_ReadReg: SUCCESS, value=0x%08lx\n", (unsigned long)*pRegVal);
+
   return 0;
 }
 
@@ -846,14 +750,11 @@ int32_t ETH_PHY_IO_ReadReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t *pRegVal
   */
 int32_t ETH_PHY_IO_WriteReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t RegVal)
 {
-  printf("PHY_WriteReg: DevAddr=%lu, RegAddr=%lu, RegVal=0x%08lx\n", 
-         (unsigned long)DevAddr, (unsigned long)RegAddr, (unsigned long)RegVal);
   if(HAL_ETH_WritePHYRegister(&heth, DevAddr, RegAddr, RegVal) != HAL_OK)
   {
-    printf("PHY_WriteReg: FAILED\n");
     return -1;
   }
-  printf("PHY_WriteReg: SUCCESS\n");
+
   return 0;
 }
 
@@ -876,84 +777,61 @@ void ethernet_link_thread(void* argument)
   ETH_MACConfigTypeDef MACConf = {0};
   int32_t PHYLinkState = 0;
   uint32_t linkchanged = 0U, speed = 0U, duplex = 0U;
-
   struct netif *netif = (struct netif *) argument;
-/* USER CODE BEGIN ETH link init */
+
   printf("Ethernet link thread started\n");
-  /* ETH_CODE: call HAL_ETH_Start_IT instead of HAL_ETH_Start
-   * This is required for operation with RTOS.
-   */
-#ifndef HAL_ETH_Start
-#define HAL_ETH_Start HAL_ETH_Start_IT
-#endif
-  /* ETH_CODE: workaround to call LOCK_TCPIP_CORE when accessing netif link functions*/
-  LOCK_TCPIP_CORE();
-/* USER CODE END ETH link init */
+
+  /* Initialize PHY asynchronously to avoid blocking the main task */
+  printf("PHY: Resetting...\n");
+  ETH_PHY_IO_WriteReg(0, 0, 0x8000); /* Soft reset */
+  sys_msleep(100);
+  
+  printf("PHY: Enabling auto-negotiation...\n");
+  ETH_PHY_IO_WriteReg(0, 0, 0x1200); /* Auto-neg + Restart */
+  
+  LAN8742.Is_Initialized = 1;
 
   for(;;)
   {
-  PHYLinkState = LAN8742_GetLinkState(&LAN8742);
-
-  if(netif_is_link_up(netif) && (PHYLinkState <= LAN8742_STATUS_LINK_DOWN))
-  {
-    HAL_ETH_Stop_IT(&heth);
-    netif_set_down(netif);
-    netif_set_link_down(netif);
-    printf("Ethernet link is DOWN\n");
-  }
-  else if(!netif_is_link_up(netif) && (PHYLinkState > LAN8742_STATUS_LINK_DOWN))
-  {
-    switch (PHYLinkState)
-    {
-    case LAN8742_STATUS_100MBITS_FULLDUPLEX:
-      duplex = ETH_FULLDUPLEX_MODE;
-      speed = ETH_SPEED_100M;
-      linkchanged = 1;
-      break;
-    case LAN8742_STATUS_100MBITS_HALFDUPLEX:
-      duplex = ETH_HALFDUPLEX_MODE;
-      speed = ETH_SPEED_100M;
-      linkchanged = 1;
-      break;
-    case LAN8742_STATUS_10MBITS_FULLDUPLEX:
-      duplex = ETH_FULLDUPLEX_MODE;
-      speed = ETH_SPEED_10M;
-      linkchanged = 1;
-      break;
-    case LAN8742_STATUS_10MBITS_HALFDUPLEX:
-      duplex = ETH_HALFDUPLEX_MODE;
-      speed = ETH_SPEED_10M;
-      linkchanged = 1;
-      break;
-    default:
-      break;
+    /* Use direct BSR read while LAN8742_GetLinkState might be unreliable */
+    uint32_t bsr = 0;
+    ETH_PHY_IO_ReadReg(0, 1, &bsr);
+    
+    if (bsr & 0x0004) {
+      /* Link is Up according to hardware */
+      if (!netif_is_link_up(netif)) {
+        printf("PHY: Link Up detected (BSR=0x%04lx)\n", (unsigned long)bsr);
+        
+        /* Fixed 100M Full Duplex for now to ensure connectivity */
+        speed = ETH_SPEED_100M;
+        duplex = ETH_FULLDUPLEX_MODE;
+        
+        LOCK_TCPIP_CORE();
+        HAL_ETH_GetMACConfig(&heth, &MACConf);
+        MACConf.DuplexMode = duplex;
+        MACConf.Speed = speed;
+        HAL_ETH_SetMACConfig(&heth, &MACConf);
+        
+        HAL_ETH_Start_IT(&heth);
+        netif_set_up(netif);
+        netif_set_link_up(netif);
+        UNLOCK_TCPIP_CORE();
+        printf("Ethernet link is UP (100Mbps Full Duplex)\n");
+      }
+    } else {
+      /* Link is Down according to hardware */
+      if (netif_is_link_up(netif)) {
+        printf("PHY: Link Down detected (BSR=0x%04lx)\n", (unsigned long)bsr);
+        LOCK_TCPIP_CORE();
+        HAL_ETH_Stop_IT(&heth);
+        netif_set_link_down(netif);
+        netif_set_down(netif);
+        UNLOCK_TCPIP_CORE();
+        printf("Ethernet link is DOWN\n");
+      }
     }
 
-    if(linkchanged)
-    {
-      /* Get MAC Config MAC */
-      HAL_ETH_GetMACConfig(&heth, &MACConf);
-      MACConf.DuplexMode = duplex;
-      MACConf.Speed = speed;
-      HAL_ETH_SetMACConfig(&heth, &MACConf);
-      HAL_ETH_Start(&heth);
-      netif_set_up(netif);
-      netif_set_link_up(netif);
-      printf("Ethernet link is UP: %s\n", (speed == ETH_SPEED_100M) ? "100Mbps" : "10Mbps");
-    }
-  }
-
-/* USER CODE BEGIN ETH link Thread core code for User BSP */
-
-  /* ETH_CODE: workaround to call LOCK_TCPIP_CORE when accessing netif link functions*/
-  UNLOCK_TCPIP_CORE();
-  sys_msleep(100);
-  LOCK_TCPIP_CORE();
-  continue; /* skip next osDelay */
-
-/* USER CODE END ETH link Thread core code for User BSP */
-
-    sys_msleep(100);
+    sys_msleep(500);
   }
 }
 
