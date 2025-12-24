@@ -332,13 +332,26 @@ static void low_level_init(struct netif *netif)
 
 /* USER CODE END PHY_PRE_CONFIG */
   printf("Registering PHY IO...\n");
+  printf("LAN8742 object at: 0x%p\n", &LAN8742);
+  printf("IOCtx at: 0x%p\n", &LAN8742_IOCtx);
+  printf("IOCtx.Init = 0x%p\n", LAN8742_IOCtx.Init);
+  printf("IOCtx.DeInit = 0x%p\n", LAN8742_IOCtx.DeInit);
+  printf("IOCtx.WriteReg = 0x%p\n", LAN8742_IOCtx.WriteReg);
+  printf("IOCtx.ReadReg = 0x%p\n", LAN8742_IOCtx.ReadReg);
+  printf("IOCtx.GetTick = 0x%p\n", LAN8742_IOCtx.GetTick);
+  
   /* Set PHY IO functions  */
-  LAN8742_RegisterBusIO(&LAN8742, &LAN8742_IOCtx);
+  LAN8742.DevAddr = 0;  /* Will be determined by LAN8742_Init */
+  LAN8742.Is_Initialized = 0;
+  
+  printf("Calling LAN8742_RegisterBusIO...\n");
+  int32_t reg_status = LAN8742_RegisterBusIO(&LAN8742, &LAN8742_IOCtx);
+  printf("RegisterBusIO returned: %ld\n", (long)reg_status);
 
-  printf("Initializing PHY...\n");
+  printf("Initializing PHY (DevAddr will be auto-detected)...\n");
   /* Initialize the LAN8742 ETH PHY */
-  LAN8742_Init(&LAN8742);
-  printf("PHY initialized\n");
+  int32_t phy_status = LAN8742_Init(&LAN8742);
+  printf("PHY initialized, status=%ld, DevAddr=%lu\n", (long)phy_status, (unsigned long)LAN8742.DevAddr);
 
   if (hal_eth_init_status == HAL_OK)
   {
@@ -773,11 +786,14 @@ int32_t ETH_PHY_IO_DeInit (void)
   */
 int32_t ETH_PHY_IO_ReadReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t *pRegVal)
 {
+  printf("PHY_ReadReg: DevAddr=%lu, RegAddr=%lu, heth=0x%p\n", 
+         (unsigned long)DevAddr, (unsigned long)RegAddr, &heth);
   if(HAL_ETH_ReadPHYRegister(&heth, DevAddr, RegAddr, pRegVal) != HAL_OK)
   {
+    printf("PHY_ReadReg: FAILED\n");
     return -1;
   }
-
+  printf("PHY_ReadReg: SUCCESS, value=0x%08lx\n", (unsigned long)*pRegVal);
   return 0;
 }
 
