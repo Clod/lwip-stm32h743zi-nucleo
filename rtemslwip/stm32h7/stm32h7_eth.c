@@ -266,6 +266,9 @@ static void low_level_init(struct netif *netif)
 
   /* End ETH HAL Init */
 
+  /* Zero out the RX pool memory in D2 SRAM */
+  memset((void *)RX_POOL_BASE_ADDR, 0, ETH_RX_BUFFER_CNT * (MEMP_SIZE + MEMP_ALIGN_SIZE(sizeof(RxBuff_t))));
+
   /* Initialize the RX POOL */
   LWIP_MEMPOOL_INIT(RX_POOL);
 

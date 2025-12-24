@@ -65,9 +65,21 @@ static rtems_task Init(rtems_task_argument argument)
 #define CONFIGURE_INIT
 #define CONFIGURE_APPLICATION_NEEDS_CLOCK_DRIVER
 #define CONFIGURE_APPLICATION_NEEDS_SIMPLE_CONSOLE_DRIVER
-#define CONFIGURE_MAXIMUM_TASKS 4
+
+/* LwIP needs a few tasks, semaphores and message queues */
+#define CONFIGURE_MAXIMUM_TASKS 12
+#define CONFIGURE_MAXIMUM_SEMAPHORES 32
+#define CONFIGURE_MAXIMUM_MESSAGE_QUEUES 16
+#define CONFIGURE_MAXIMUM_MRESOURCES 16
+
+/* Give plenty of memory for message buffers */
+#define CONFIGURE_MESSAGE_BUFFER_MEMORY \
+  (16 * 32 * (sizeof(void *) + 16))
+
+#define CONFIGURE_UNIFIED_WORK_AREAS
+
 #define CONFIGURE_RTEMS_INIT_TASKS_TABLE
-#define CONFIGURE_INIT_TASK_STACK_SIZE (16 * 1024)
+#define CONFIGURE_INIT_TASK_STACK_SIZE (32 * 1024)
 #define CONFIGURE_INITIAL_EXTENSIONS RTEMS_TEST_INITIAL_EXTENSION
 
 #include <rtems/confdefs.h>
