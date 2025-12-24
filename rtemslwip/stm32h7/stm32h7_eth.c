@@ -333,6 +333,11 @@ static void low_level_init(struct netif *netif)
   printf("IOCtx.ReadReg = 0x%p\n", LAN8742_IOCtx.ReadReg);
   printf("IOCtx.GetTick = 0x%p\n", LAN8742_IOCtx.GetTick);
   
+  /* Test HAL_GetTick before PHY init */
+  printf("Testing HAL_GetTick: %lu\n", (unsigned long)HAL_GetTick());
+  rtems_task_wake_after(RTEMS_MILLISECONDS_TO_TICKS(100));
+  printf("After 100ms delay, HAL_GetTick: %lu\n", (unsigned long)HAL_GetTick());
+  
   /* Set PHY IO functions  */
   LAN8742.DevAddr = 0;  /* Will be determined by LAN8742_Init */
   LAN8742.Is_Initialized = 0;
