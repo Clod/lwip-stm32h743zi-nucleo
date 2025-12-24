@@ -266,14 +266,23 @@ static void low_level_init(struct netif *netif)
 
   /* End ETH HAL Init */
 
+  printf("Initializing RX pool at 0x%08lx, size=%lu\n", 
+         (unsigned long)RX_POOL_BASE_ADDR,
+         (unsigned long)(ETH_RX_BUFFER_CNT * (MEMP_SIZE + MEMP_ALIGN_SIZE(sizeof(RxBuff_t)))));
+  printf("memp_RX_POOL.base = 0x%p, .tab = 0x%p\n", 
+         memp_RX_POOL.base, memp_RX_POOL.tab);
+
   /* Zero out the RX pool memory in D2 SRAM */
   memset((void *)RX_POOL_BASE_ADDR, 0, ETH_RX_BUFFER_CNT * (MEMP_SIZE + MEMP_ALIGN_SIZE(sizeof(RxBuff_t))));
 
   /* Initialize the RX POOL */
+  printf("Calling LWIP_MEMPOOL_INIT(RX_POOL)...\n");
   LWIP_MEMPOOL_INIT(RX_POOL);
+  printf("RX Pool initialized. tab = 0x%p\n", memp_RX_POOL.tab ? *memp_RX_POOL.tab : NULL);
 
 #if LWIP_ARP || LWIP_ETHERNET
 
+  printf("Setting MAC address...\n");
   /* set MAC hardware address length */
   netif->hwaddr_len = ETH_HWADDR_LEN;
 
@@ -296,30 +305,40 @@ static void low_level_init(struct netif *netif)
     netif->flags |= NETIF_FLAG_BROADCAST;
   #endif /* LWIP_ARP */
 
+  printf("Creating RxPktSemaphore...\n");
   /* create a binary semaphore used for informing ethernetif of frame reception */
   if (sys_sem_new(&RxPktSemaphore, 1) != ERR_OK) {
         /* Handle error */
+        printf("ERROR: Failed to create RxPktSemaphore\n");
   }
 
+  printf("Creating TxPktSemaphore...\n");
   /* create a binary semaphore used for informing ethernetif of frame transmission */
   if (sys_sem_new(&TxPktSemaphore, 1) != ERR_OK) {
         /* Handle error */
+        printf("ERROR: Failed to create TxPktSemaphore\n");
   }
 
+  printf("Creating Ethernet threads...\n");
   /* create the task that handles the ETH_MAC */
 /* USER CODE BEGIN OS_THREAD_NEW_CMSIS_RTOS_V2 */
   sys_thread_new("EthIf", ethernetif_input, netif, INTERFACE_THREAD_STACK_SIZE, TCPIP_THREAD_PRIO);
+  printf("EthIf thread created\n");
   sys_thread_new("EthLink", ethernet_link_thread, netif, INTERFACE_THREAD_STACK_SIZE, TCPIP_THREAD_PRIO);
+  printf("EthLink thread created\n");
 /* USER CODE END OS_THREAD_NEW_CMSIS_RTOS_V2 */
 
 /* USER CODE BEGIN PHY_PRE_CONFIG */
 
 /* USER CODE END PHY_PRE_CONFIG */
-  /* Set PHY IO functions */
+  printf("Registering PHY IO...\n");
+  /* Set PHY IO functions  */
   LAN8742_RegisterBusIO(&LAN8742, &LAN8742_IOCtx);
 
+  printf("Initializing PHY...\n");
   /* Initialize the LAN8742 ETH PHY */
   LAN8742_Init(&LAN8742);
+  printf("PHY initialized\n");
 
   if (hal_eth_init_status == HAL_OK)
   {
@@ -463,9 +482,11 @@ static struct pbuf * low_level_input(struct netif *netif)
 {
   struct pbuf *p = NULL;
 
+  printf("low_level_input: RxAllocStatus=%d\n", RxAllocStatus);
   if(RxAllocStatus == RX_ALLOC_OK)
   {
     HAL_ETH_ReadData(&heth, (void **)&p);
+    printf("low_level_input: got pbuf 0x%p\n", p);
   }
 
   return p;
@@ -591,6 +612,7 @@ err_t ethernetif_init(struct netif *netif)
   */
 void pbuf_free_custom(struct pbuf *p)
 {
+  printf("pbuf_free_custom: p=0x%p\n", p);
   struct pbuf_custom* custom_pbuf = (struct pbuf_custom*)p;
   LWIP_MEMPOOL_FREE(RX_POOL, custom_pbuf);
 
