@@ -319,14 +319,7 @@ static void low_level_init(struct netif *netif)
         printf("ERROR: Failed to create TxPktSemaphore\n");
   }
 
-  printf("Creating Ethernet threads...\n");
-  /* create the task that handles the ETH_MAC */
-/* USER CODE BEGIN OS_THREAD_NEW_CMSIS_RTOS_V2 */
-  sys_thread_new("EthIf", ethernetif_input, netif, INTERFACE_THREAD_STACK_SIZE, TCPIP_THREAD_PRIO);
-  printf("EthIf thread created\n");
-  sys_thread_new("EthLink", ethernet_link_thread, netif, INTERFACE_THREAD_STACK_SIZE, TCPIP_THREAD_PRIO);
-  printf("EthLink thread created\n");
-/* USER CODE END OS_THREAD_NEW_CMSIS_RTOS_V2 */
+  /* NOTE: Ethernet threads will be created AFTER PHY init to avoid race conditions */
 
 /* USER CODE BEGIN PHY_PRE_CONFIG */
 
@@ -351,10 +344,12 @@ static void low_level_init(struct netif *netif)
   printf("Initializing PHY (DevAddr will be auto-detected)...\n");
   /* Initialize the LAN8742 ETH PHY */
   int32_t phy_status = LAN8742_Init(&LAN8742);
-  printf("PHY initialized, status=%ld, DevAddr=%lu\n", (long)phy_status, (unsigned long)LAN8742.DevAddr);
+  printf("PHY_Init completed: status=%ld, DevAddr=%lu\n", (long)phy_status, (unsigned long)LAN8742.DevAddr);
 
+  printf("Checking ETH init status...\n");
   if (hal_eth_init_status == HAL_OK)
   {
+    printf("Getting PHY link state...\n");
     PHYLinkState = LAN8742_GetLinkState(&LAN8742);
 
     /* Get link state */
@@ -412,6 +407,13 @@ static void low_level_init(struct netif *netif)
 #endif /* LWIP_ARP || LWIP_ETHERNET */
 
 /* USER CODE BEGIN LOW_LEVEL_INIT */
+  
+  /* Now that hardware is fully initialized, create the Ethernet threads */
+  printf("Creating Ethernet threads (after PHY init)...\n");
+  sys_thread_new("EthIf", ethernetif_input, netif, INTERFACE_THREAD_STACK_SIZE, TCPIP_THREAD_PRIO);
+  printf("EthIf thread created\n");
+  sys_thread_new("EthLink", ethernet_link_thread, netif, INTERFACE_THREAD_STACK_SIZE, TCPIP_THREAD_PRIO);
+  printf("EthLink thread created\n");
 
 /* USER CODE END LOW_LEVEL_INIT */
 }
@@ -518,6 +520,8 @@ void ethernetif_input(void* argument)
 {
   struct pbuf *p = NULL;
   struct netif *netif = (struct netif *) argument;
+
+  printf("ethernetif_input thread started, netif=0x%p\n", netif);
 
   for( ;; )
   {
@@ -823,9 +827,7 @@ int32_t ETH_PHY_IO_WriteReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t RegVal)
   */
 int32_t ETH_PHY_IO_GetTick(void)
 {
-  uint32_t tick = HAL_GetTick();
-  printf("PHY_GetTick: returned %lu\n", (unsigned long)tick);
-  return tick;
+  return HAL_GetTick();
 }
 
 /**
