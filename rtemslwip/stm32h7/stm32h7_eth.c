@@ -346,10 +346,41 @@ static void low_level_init(struct netif *netif)
   int32_t reg_status = LAN8742_RegisterBusIO(&LAN8742, &LAN8742_IOCtx);
   printf("RegisterBusIO returned: %ld\n", (long)reg_status);
 
-  printf("Initializing PHY (DevAddr will be auto-detected)...\n");
-  /* Initialize the LAN8742 ETH PHY */
-  int32_t phy_status = LAN8742_Init(&LAN8742);
-  printf("PHY_Init completed: status=%ld, DevAddr=%lu\n", (long)phy_status, (unsigned long)LAN8742.DevAddr);
+  printf("Initializing PHY manually (avoiding busy-wait)...\n");
+  /* Manual PHY initialization to avoid the 2-second busy-wait in LAN8742_Init */
+  
+  /* Set DevAddr to 0 (the LAN8742 on Nucleo-H743ZI) */
+  LAN8742.DevAddr = 0;
+  LAN8742.Is_Initialized = 0;
+  
+  /* Verify PHY is present by reading the ID register */
+  uint32_t phy_id = 0;
+  if (ETH_PHY_IO_ReadReg(0, 18, &phy_id) == 0) {
+    printf("PHY ID register = 0x%08lx\n", (unsigned long)phy_id);
+  }
+  
+  /* Perform soft reset */
+  printf("Performing PHY soft reset...\n");
+  ETH_PHY_IO_WriteReg(0, 0, 0x8000);  /* LAN8742_BCR_SOFT_RESET */
+  
+  /* Wait for reset to complete (with RTEMS-friendly delay) */
+  uint32_t reset_start = HAL_GetTick();
+  uint32_t reg_val = 0x8000;
+  while (reg_val & 0x8000) {
+    if ((HAL_GetTick() - reset_start) > 500) {
+      printf("PHY reset timeout!\n");
+      break;
+    }
+    rtems_task_wake_after(RTEMS_MILLISECONDS_TO_TICKS(10));
+    ETH_PHY_IO_ReadReg(0, 0, &reg_val);
+  }
+  printf("PHY reset complete\n");
+  
+  /* Enable auto-negotiation */
+  ETH_PHY_IO_WriteReg(0, 0, 0x1000);  /* LAN8742_BCR_AUTONEGO_EN */
+  
+  LAN8742.Is_Initialized = 1;
+  printf("PHY manual init complete, DevAddr=%lu\n", (unsigned long)LAN8742.DevAddr);
 
   printf("Checking ETH init status...\n");
   if (hal_eth_init_status == HAL_OK)
