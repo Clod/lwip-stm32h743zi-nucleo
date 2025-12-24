@@ -1,0 +1,9 @@
+{
+  "header-paths-to-import": [
+    "rtemslwip/stm32h7/include"
+  ],
+  "source-files-to-import": [
+    "rtemslwip/stm32h7/stm32h7_eth.c",
+    "rtemslwip/stm32h7/stm32h7_lan8742.c"
+  ]
+}
