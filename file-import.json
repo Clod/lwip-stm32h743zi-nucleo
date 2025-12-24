@@ -1,5 +1,5 @@
 {
-  "files-to-import" : [
+  "files-to-import": [
     "src/core/altcp_alloc.c",
     "src/core/def.c",
     "src/core/mem.c",
@@ -80,6 +80,7 @@
     "src/netif/ppp/ccp.c",
     "src/netif/ppp/chap-md5.c",
     "src/netif/ppp/pppcrypt.c",
+    "src/apps/lwiperf/lwiperf.c",
     "src/netif/ppp/polarssl/sha1.c",
     "src/netif/ppp/polarssl/md5.c",
     "src/netif/ppp/polarssl/des.c",

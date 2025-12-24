@@ -38,8 +38,6 @@ void ethernetif_input(void* argument);
 void ethernet_link_thread(void* argument );
 
 void Error_Handler(void);
-u32_t sys_jiffies(void);
-u32_t sys_now(void);
 
 /* USER CODE BEGIN 1 */
 

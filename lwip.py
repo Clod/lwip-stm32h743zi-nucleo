@@ -137,6 +137,16 @@ def build(bld):
                 lib=['rtemscpu', 'rtemsbsp', 'rtemstest', 'lwip'],
                 includes=' '.join(test_app_incl))
 
+    if bsp == 'nucleo-h743zi':
+        bld.program(features='c',
+                    target='stm32h7_test.exe',
+                    source='rtemslwip/test/stm32h7_test/stm32h7_test.c',
+                    cflags='-g -Wall -O0',
+                    install_path=None,
+                    use='lwip',
+                    lib=['rtemscpu', 'rtemsbsp', 'rtemstest', 'lwip'],
+                    includes=' '.join(test_app_incl))
+
     lib_path = os.path.join(bld.env.PREFIX, arch_lib_path)
     rtems_lib_path = os.path.join(bld.env.RTEMS_PATH, arch_lib_path)
     bld.read_stlib('rtemstest', paths=[lib_path, rtems_lib_path])

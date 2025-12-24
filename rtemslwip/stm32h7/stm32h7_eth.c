@@ -108,54 +108,10 @@ static uint8_t RxAllocStatus;
 __IO uint32_t TxPkt = 0;
 __IO uint32_t RxPkt = 0;
 
-#if defined ( __ICCARM__ ) /*!< IAR Compiler */
+ETH_DMADescTypeDef DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
+ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT];   /* Ethernet Tx DMA Descriptors */
 
-#pragma location=0x30040000
-ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
-#pragma location=0x30040200
-ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
-
-#elif defined ( __CC_ARM )  /* MDK ARM Compiler */
-
-__attribute__((at(0x30040000))) ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
-__attribute__((at(0x30040200))) ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
-
-#elif defined ( __GNUC__ ) /* GNU Compiler */
-
-ETH_DMADescTypeDef DMARxDscrTab[ETH_RX_DESC_CNT] __attribute__((section(".RxDecripSection"))); /* Ethernet Rx DMA Descriptors */
-ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT] __attribute__((section(".TxDecripSection")));   /* Ethernet Tx DMA Descriptors */
-
-#endif
-
-/* USER CODE BEGIN 2 */
-/* ETH_CODE: placement of RX_POOL
- * Please note this was tested only for GCC compiler.
- * Additional code needed in linkerscript for GCC.
- *
- * Also this buffer can be placed in D1 SRAM
- * if there is not sufficient space in D2.
- * This can be case of STM32H72x/H73x devices.
- * However the 32-byte alignment should be forced.
- * Below is example of placement into BSS section
- *
- * . = ALIGN(32);
- * *(.Rx_PoolSection)
- * . = ALIGN(4);
- * _ebss = .;
- *  __bss_end__ = _ebss;
- * } >RAM_D1
- */
-#if defined ( __ICCARM__ ) /*!< IAR Compiler */
-#pragma location = 0x30040200
 extern u8_t memp_memory_RX_POOL_base[];
-
-#elif defined ( __CC_ARM )  /* MDK ARM Compiler */
-__attribute__((at(0x30040200)) extern u8_t memp_memory_RX_POOL_base[];
-
-#elif defined ( __GNUC__ ) /* GNU Compiler */
-__attribute__((section(".Rx_PoolSection"))) extern u8_t memp_memory_RX_POOL_base[];
-
-#endif
 /* USER CODE END 2 */
 
 sys_sem_t RxPktSemaphore;   /* Semaphore to signal incoming packets */
@@ -594,18 +550,6 @@ void pbuf_free_custom(struct pbuf *p)
 }
 
 /* USER CODE BEGIN 6 */
-
-/**
-* @brief  Returns the current time in milliseconds
-*         when LWIP_TIMERS == 1 and NO_SYS == 1
-* @param  None
-* @retval Current Time value
-*/
-u32_t sys_now(void)
-{
-  return HAL_GetTick();
-}
-
 /* USER CODE END 6 */
 
 void HAL_ETH_MspInit(ETH_HandleTypeDef* ethHandle)
