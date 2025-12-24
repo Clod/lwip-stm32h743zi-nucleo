@@ -40,7 +40,12 @@ static rtems_task Init(rtems_task_argument argument)
 
   netif_add(&netif, &ipaddr, &netmask, &gw, NULL, ethernetif_init, tcpip_input);
   netif_set_default(&netif);
-  netif_set_up(&netif);
+  // netif_set_up(&netif); // The link thread will do this
+
+  printf("Waiting for Ethernet link to come up...\n");
+  while (!netif_is_link_up(&netif)) {
+    rtems_task_wake_after(RTEMS_MILLISECONDS_TO_TICKS(500));
+  }
 
   printf("Interface up, starting lwiperf server...\n");
 

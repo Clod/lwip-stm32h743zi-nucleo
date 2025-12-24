@@ -31,6 +31,7 @@
 #include <string.h>
 #include "lwip/sys.h"
 #include "lwip/tcpip.h"
+#include <rtems/irq-extension.h>
 
 /* Within 'USER CODE' section, code will be kept by default at each generation */
 /* USER CODE BEGIN 0 */
@@ -98,9 +99,25 @@ typedef struct
   uint8_t buff[(ETH_RX_BUFFER_SIZE + 31) & ~31] __ALIGNED(32);
 } RxBuff_t;
 
-/* Memory Pool Declaration */
+/* Memory Pool Manual Declaration (points to D2 SRAM) */
 #define ETH_RX_BUFFER_CNT             12U
-LWIP_MEMPOOL_DECLARE(RX_POOL, ETH_RX_BUFFER_CNT, sizeof(RxBuff_t), "Zero-copy RX PBUF pool");
+#define RX_POOL_BASE_ADDR             0x30020000
+
+#if MEMP_STATS
+static struct stats_mem memp_stats_RX_POOL;
+#endif
+static struct memp *memp_tab_RX_POOL;
+
+const struct memp_desc memp_RX_POOL = {
+  DECLARE_LWIP_MEMPOOL_DESC("Zero-copy RX PBUF pool")
+#if MEMP_STATS
+  &memp_stats_RX_POOL,
+#endif
+  LWIP_MEM_ALIGN_SIZE(sizeof(RxBuff_t)),
+  ETH_RX_BUFFER_CNT,
+  (uint8_t *)RX_POOL_BASE_ADDR,
+  &memp_tab_RX_POOL
+};
 
 /* Variable Definitions */
 static uint8_t RxAllocStatus;
@@ -108,10 +125,9 @@ static uint8_t RxAllocStatus;
 __IO uint32_t TxPkt = 0;
 __IO uint32_t RxPkt = 0;
 
-ETH_DMADescTypeDef DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
-ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT];   /* Ethernet Tx DMA Descriptors */
+ETH_DMADescTypeDef *DMARxDscrTab = (ETH_DMADescTypeDef *)0x30040000; /* Ethernet Rx DMA Descriptors */
+ETH_DMADescTypeDef *DMATxDscrTab = (ETH_DMADescTypeDef *)0x30040200; /* Ethernet Tx DMA Descriptors */
 
-extern u8_t memp_memory_RX_POOL_base[];
 /* USER CODE END 2 */
 
 sys_sem_t RxPktSemaphore;   /* Semaphore to signal incoming packets */
@@ -127,6 +143,7 @@ int32_t ETH_PHY_IO_DeInit (void);
 int32_t ETH_PHY_IO_ReadReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t *pRegVal);
 int32_t ETH_PHY_IO_WriteReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t RegVal);
 int32_t ETH_PHY_IO_GetTick(void);
+static void MPU_Config(void);
 
 lan8742_Object_t LAN8742;
 lan8742_IOCtx_t  LAN8742_IOCtx = {ETH_PHY_IO_Init,
@@ -141,6 +158,11 @@ lan8742_IOCtx_t  LAN8742_IOCtx = {ETH_PHY_IO_Init,
 
 /* Private functions ---------------------------------------------------------*/
 void pbuf_free_custom(struct pbuf *p);
+
+static void stm32h7_eth_interrupt_handler(void *arg)
+{
+  HAL_ETH_IRQHandler(&heth);
+}
 
 /**
   * @brief  Ethernet Rx Transfer completed callback
@@ -195,6 +217,7 @@ static void low_level_init(struct netif *netif)
   int32_t PHYLinkState = 0;
   ETH_MACConfigTypeDef MACConf = {0};
   /* Start ETH HAL Init */
+  MPU_Config();
 
    uint8_t MACAddr[6] ;
   heth.Instance = ETH;
@@ -203,18 +226,32 @@ static void low_level_init(struct netif *netif)
   MACAddr[2] = 0xE1;
   MACAddr[3] = 0x00;
   MACAddr[4] = 0x00;
-  MACAddr[5] = 0x00;
+  MACAddr[5] = 0x01;
   heth.Init.MACAddr = &MACAddr[0];
   heth.Init.MediaInterface = HAL_ETH_RMII_MODE;
   heth.Init.TxDesc = DMATxDscrTab;
   heth.Init.RxDesc = DMARxDscrTab;
   heth.Init.RxBuffLen = 1536;
 
-  /* USER CODE BEGIN MACADDRESS */
-
   /* USER CODE END MACADDRESS */
+  
+  HAL_NVIC_SetPriority(ETH_IRQn, 0x7, 0);
+  HAL_NVIC_EnableIRQ(ETH_IRQn);
 
   hal_eth_init_status = HAL_ETH_Init(&heth);
+  
+  if (hal_eth_init_status == HAL_OK) {
+    rtems_status_code sc = rtems_interrupt_handler_install(
+      ETH_IRQn,
+      "ETH",
+      RTEMS_INTERRUPT_UNIQUE,
+      stm32h7_eth_interrupt_handler,
+      NULL
+    );
+    if (sc != RTEMS_SUCCESSFUL) {
+      hal_eth_init_status = HAL_ERROR;
+    }
+  }
 
   memset(&TxConfig, 0 , sizeof(ETH_TxPacketConfig));
   TxConfig.Attributes = ETH_TX_PACKETS_FEATURES_CSUM | ETH_TX_PACKETS_FEATURES_CRCPAD;
@@ -263,6 +300,7 @@ static void low_level_init(struct netif *netif)
   /* create the task that handles the ETH_MAC */
 /* USER CODE BEGIN OS_THREAD_NEW_CMSIS_RTOS_V2 */
   sys_thread_new("EthIf", ethernetif_input, netif, INTERFACE_THREAD_STACK_SIZE, TCPIP_THREAD_PRIO);
+  sys_thread_new("EthLink", ethernet_link_thread, netif, INTERFACE_THREAD_STACK_SIZE, TCPIP_THREAD_PRIO);
 /* USER CODE END OS_THREAD_NEW_CMSIS_RTOS_V2 */
 
 /* USER CODE BEGIN PHY_PRE_CONFIG */
@@ -388,6 +426,11 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
   TxConfig.pData = p;
 
   pbuf_ref(p);
+
+  for(q = p; q != NULL; q = q->next)
+  {
+    SCB_CleanDCache_by_Addr((uint32_t *)q->payload, q->len);
+  }
 
   HAL_ETH_Transmit_IT(&heth, &TxConfig);
   sys_arch_sem_wait(&TxPktSemaphore, TIME_WAITING_FOR_INPUT);
@@ -743,6 +786,7 @@ void ethernet_link_thread(void* argument)
 
   struct netif *netif = (struct netif *) argument;
 /* USER CODE BEGIN ETH link init */
+  printf("Ethernet link thread started\n");
   /* ETH_CODE: call HAL_ETH_Start_IT instead of HAL_ETH_Start
    * This is required for operation with RTOS.
    */
@@ -762,6 +806,7 @@ void ethernet_link_thread(void* argument)
     HAL_ETH_Stop_IT(&heth);
     netif_set_down(netif);
     netif_set_link_down(netif);
+    printf("Ethernet link is DOWN\n");
   }
   else if(!netif_is_link_up(netif) && (PHYLinkState > LAN8742_STATUS_LINK_DOWN))
   {
@@ -801,6 +846,7 @@ void ethernet_link_thread(void* argument)
       HAL_ETH_Start(&heth);
       netif_set_up(netif);
       netif_set_link_up(netif);
+      printf("Ethernet link is UP: %s\n", (speed == ETH_SPEED_100M) ? "100Mbps" : "10Mbps");
     }
   }
 
@@ -893,9 +939,6 @@ void HAL_ETH_TxFreeCallback(uint32_t * buff)
 /* USER CODE BEGIN 8 */
 /* ETH_CODE: add functions needed for proper multithreading support and check */
 
-/* USER CODE BEGIN 8 */
-/* ETH_CODE: add functions needed for proper multithreading support and check */
-
 /* CMSIS-OS specific locking checks removed for RTEMS port */
 void sys_lock_tcpip_core(void){
   LOCK_TCPIP_CORE();
@@ -911,6 +954,55 @@ void sys_check_core_locking(void){
 
 void sys_mark_tcpip_thread(void){
   /* Not implemented for RTEMS port */
+}
+
+static void MPU_Config(void)
+{
+  MPU_Region_InitTypeDef MPU_InitStruct = {0};
+
+  /* Disables the MPU */
+  HAL_MPU_Disable();
+
+  /** Initializes and configures the Region and the memory to be protected
+  */
+  MPU_InitStruct.Enable = MPU_REGION_ENABLE;
+  MPU_InitStruct.Number = MPU_REGION_NUMBER0;
+  MPU_InitStruct.BaseAddress = 0x0;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_4GB;
+  MPU_InitStruct.SubRegionDisable = 0x87;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
+  MPU_InitStruct.AccessPermission = MPU_REGION_NO_ACCESS;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /** Initializes and configures the Region and the memory to be protected
+  */
+  MPU_InitStruct.Number = MPU_REGION_NUMBER1;
+  MPU_InitStruct.BaseAddress = 0x30020000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_128KB;
+  MPU_InitStruct.SubRegionDisable = 0x0;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
+  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /** Initializes and configures the Region and the memory to be protected
+  */
+  MPU_InitStruct.Number = MPU_REGION_NUMBER2;
+  MPU_InitStruct.BaseAddress = 0x30040000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_512B;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+  /* Enables the MPU */
+  HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
 }
 /* USER CODE END 8 */
 
