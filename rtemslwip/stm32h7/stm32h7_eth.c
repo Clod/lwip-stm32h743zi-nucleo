@@ -29,6 +29,7 @@
 #include "stm32h7_eth.h"
 #include "stm32h7_lan8742.h"
 #include <string.h>
+#include <stddef.h>
 #include "lwip/sys.h"
 #include "lwip/tcpip.h"
 #include <rtems/irq-extension.h>
@@ -197,8 +198,11 @@ void HAL_ETH_TxCpltCallback(ETH_HandleTypeDef *handlerEth)
   */
 void HAL_ETH_ErrorCallback(ETH_HandleTypeDef *handlerEth)
 {
-  if((HAL_ETH_GetDMAError(handlerEth) & ETH_DMACSR_RBU) == ETH_DMACSR_RBU)
+  uint32_t dma_err = HAL_ETH_GetDMAError(handlerEth);
+  printf("ETH Error Callback: DMA Error=0x%08lx\n", (unsigned long)dma_err);
+  if((dma_err & ETH_DMACSR_RBU) == ETH_DMACSR_RBU)
   {
+     printf("ETH Error: Receive Buffer Unavailable\n");
      sys_sem_signal(&RxPktSemaphore);
   }
 }
@@ -227,7 +231,7 @@ static void low_level_init(struct netif *netif)
   /* Start ETH HAL Init */
   MPU_Config();
 
-   uint8_t MACAddr[6] ;
+   static uint8_t MACAddr[6] ;
   heth.Instance = ETH;
   MACAddr[0] = 0x00;
   MACAddr[1] = 0x80;
@@ -608,6 +612,12 @@ void HAL_ETH_MspInit(ETH_HandleTypeDef* ethHandle)
   /* USER CODE BEGIN ETH_MspInit 0 */
 
   /* USER CODE END ETH_MspInit 0 */
+    /* Enable SYSCFG clock for Ethernet RMII/MII selection */
+    __HAL_RCC_SYSCFG_CLK_ENABLE();
+    
+    /* Select RMII Interface */
+    HAL_SYSCFG_ETHInterfaceSelect(SYSCFG_ETH_RMII);
+
     /* Enable Peripheral clock */
     __HAL_RCC_ETH1MAC_CLK_ENABLE();
     __HAL_RCC_ETH1TX_CLK_ENABLE();
@@ -854,7 +864,11 @@ void ethernet_link_thread(void* argument)
         MACConf.Speed = speed;
         HAL_ETH_SetMACConfig(&heth, &MACConf);
         
-        HAL_ETH_Start_IT(&heth);
+        if (HAL_ETH_Start_IT(&heth) != HAL_OK) {
+          printf("ERROR: HAL_ETH_Start_IT failed!\n");
+        } else {
+          printf("HAL_ETH_Start_IT successful\n");
+        }
         
         /* ETH_CODE: Manually enable DMA interrupts to ensure they are properly configured
          * This is needed because HAL_ETH_Start_IT() might not enable all required
@@ -868,6 +882,14 @@ void ethernet_link_thread(void* argument)
         __HAL_ETH_MAC_ENABLE_IT(&heth, ETH_MAC_RX_STATUS_IT | ETH_MAC_TX_STATUS_IT);
         printf("ETH: DMACIER = 0x%08lx, MACIER = 0x%08lx\n",
                (unsigned long)heth.Instance->DMACIER, (unsigned long)heth.Instance->MACIER);
+        printf("ETH: DMACSR  = 0x%08lx\n", (unsigned long)heth.Instance->DMACSR);
+        printf("ETH: SYSCFG_PMCR = 0x%08lx\n", (unsigned long)SYSCFG->PMCR);
+        printf("ETH: MACCR = 0x%08lx\n", (unsigned long)heth.Instance->MACCR);
+        printf("RX Desc 0: 0x%08lx 0x%08lx 0x%08lx 0x%08lx\n",
+               (unsigned long)DMARxDscrTab[0].DESC0,
+               (unsigned long)DMARxDscrTab[0].DESC1,
+               (unsigned long)DMARxDscrTab[0].DESC2,
+               (unsigned long)DMARxDscrTab[0].DESC3);
         
         netif_set_up(netif);
         netif_set_link_up(netif);
@@ -1006,26 +1028,15 @@ static void MPU_Config(void)
 
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
-  /** Region 1: RX Buffers (D2 SRAM) - Non-cacheable, Non-bufferable
+  /** Region 1: D2 SRAM (Buffers & Descriptors) - Non-cacheable, Non-bufferable
   */
   MPU_InitStruct.Number = MPU_REGION_NUMBER1;
-  MPU_InitStruct.BaseAddress = 0x30020000;
-  MPU_InitStruct.Size = MPU_REGION_SIZE_128KB;
+  MPU_InitStruct.BaseAddress = 0x30000000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_256KB;
   MPU_InitStruct.SubRegionDisable = 0x0;
-  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0; // Changed to TEX 0 for simpler mapping
-  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
-  MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
-  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
-  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
-
-  HAL_MPU_ConfigRegion(&MPU_InitStruct);
-
-  /** Region 2: Descriptors (D2 SRAM) - Non-cacheable, Non-bufferable
-  */
-  MPU_InitStruct.Number = MPU_REGION_NUMBER2;
-  MPU_InitStruct.BaseAddress = 0x30040000;
-  MPU_InitStruct.Size = MPU_REGION_SIZE_512B;
   MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
+  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
   MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
   MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
   MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;

@@ -99,7 +99,23 @@ typedef struct
 
 /* Memory Pool Declaration */
 #define ETH_RX_BUFFER_CNT             12U
-LWIP_MEMPOOL_DECLARE(RX_POOL, ETH_RX_BUFFER_CNT, sizeof(RxBuff_t), "Zero-copy RX PBUF pool");
+#define RX_POOL_BASE_ADDR             0x30020000
+
+#if MEMP_STATS
+static struct stats_mem memp_stats_RX_POOL;
+#endif
+static struct memp *memp_tab_RX_POOL;
+
+const struct memp_desc memp_RX_POOL = {
+  DECLARE_LWIP_MEMPOOL_DESC("Zero-copy RX PBUF pool")
+#if MEMP_STATS
+  &memp_stats_RX_POOL,
+#endif
+  LWIP_MEM_ALIGN_SIZE(sizeof(RxBuff_t)),
+  ETH_RX_BUFFER_CNT,
+  (uint8_t *)RX_POOL_BASE_ADDR,
+  &memp_tab_RX_POOL
+};
 
 /* Variable Definitions */
 static uint8_t RxAllocStatus;
@@ -107,24 +123,12 @@ static uint8_t RxAllocStatus;
 __IO uint32_t TxPkt = 0;
 __IO uint32_t RxPkt = 0;
 
-#if defined ( __ICCARM__ ) /*!< IAR Compiler */
+/* ETH_CODE: Direct pointer assignment for DMA descriptors to fixed addresses */
+ETH_DMADescTypeDef *DMARxDscrTab = (ETH_DMADescTypeDef *)0x30040000; /* Ethernet Rx DMA Descriptors */
+ETH_DMADescTypeDef *DMATxDscrTab = (ETH_DMADescTypeDef *)0x30040200; /* Ethernet Tx DMA Descriptors */
 
-#pragma location=0x30040000
-ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
-#pragma location=0x30040200
-ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
-
-#elif defined ( __CC_ARM )  /* MDK ARM Compiler */
-
-__attribute__((at(0x30040000))) ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
-__attribute__((at(0x30040200))) ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
-
-#elif defined ( __GNUC__ ) /* GNU Compiler */
-
-ETH_DMADescTypeDef DMARxDscrTab[ETH_RX_DESC_CNT] __attribute__((section(".RxDecripSection"))); /* Ethernet Rx DMA Descriptors */
-ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT] __attribute__((section(".TxDecripSection")));   /* Ethernet Tx DMA Descriptors */
-
-#endif
+__IO uint32_t EthIrqCount = 0;
+__IO uint32_t RxIrqCount = 0;
 
 /* USER CODE BEGIN 2 */
 /* ETH_CODE: placement of RX_POOL
@@ -185,6 +189,15 @@ lan8742_IOCtx_t  LAN8742_IOCtx = {ETH_PHY_IO_Init,
 /* Private functions ---------------------------------------------------------*/
 void pbuf_free_custom(struct pbuf *p);
 
+/* ETH_CODE: Interrupt handler with debug tracking */
+static void stm32h7_eth_interrupt_handler(void *arg)
+{
+  EthIrqCount++;
+  /* Debug: Log interrupt entry */
+  printf("ETH IRQ: EthIrqCount=%lu\n", (unsigned long)EthIrqCount);
+  HAL_ETH_IRQHandler(&heth);
+}
+
 /**
   * @brief  Ethernet Rx Transfer completed callback
   * @param  handlerEth: ETH handler
@@ -192,6 +205,8 @@ void pbuf_free_custom(struct pbuf *p);
   */
 void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *handlerEth)
 {
+  RxIrqCount++;
+  printf("ETH RX Callback: RxIrqCount=%lu\n", (unsigned long)RxIrqCount);
   osSemaphoreRelease(RxPktSemaphore);
 }
 /**
@@ -210,8 +225,11 @@ void HAL_ETH_TxCpltCallback(ETH_HandleTypeDef *handlerEth)
   */
 void HAL_ETH_ErrorCallback(ETH_HandleTypeDef *handlerEth)
 {
-  if((HAL_ETH_GetDMAError(handlerEth) & ETH_DMACSR_RBU) == ETH_DMACSR_RBU)
+  uint32_t dma_err = HAL_ETH_GetDMAError(handlerEth);
+  printf("ETH Error Callback: DMA Error=0x%08lx\n", (unsigned long)dma_err);
+  if((dma_err & ETH_DMACSR_RBU) == ETH_DMACSR_RBU)
   {
+     printf("ETH Error: Receive Buffer Unavailable\n");
      osSemaphoreRelease(RxPktSemaphore);
   }
 }
@@ -268,8 +286,19 @@ static void low_level_init(struct netif *netif)
 
   /* End ETH HAL Init */
 
+  printf("Initializing RX pool at 0x%08lx, size=%lu\n",
+         (unsigned long)RX_POOL_BASE_ADDR,
+         (unsigned long)(ETH_RX_BUFFER_CNT * (MEMP_SIZE + MEMP_ALIGN_SIZE(sizeof(RxBuff_t)))));
+  printf("memp_RX_POOL.base = 0x%p, .tab = 0x%p\n",
+         memp_RX_POOL.base, memp_RX_POOL.tab);
+
+  /* ETH_CODE: Zero out of RX pool memory in D2 SRAM */
+  memset((void *)RX_POOL_BASE_ADDR, 0, ETH_RX_BUFFER_CNT * (MEMP_SIZE + MEMP_ALIGN_SIZE(sizeof(RxBuff_t))));
+
   /* Initialize the RX POOL */
+  printf("Calling LWIP_MEMPOOL_INIT(RX_POOL)...\n");
   LWIP_MEMPOOL_INIT(RX_POOL);
+  printf("RX Pool initialized. tab = 0x%p\n", memp_RX_POOL.tab ? *memp_RX_POOL.tab : NULL);
 
 #if LWIP_ARP || LWIP_ETHERNET
 
@@ -434,6 +463,14 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
 
   pbuf_ref(p);
 
+  /* ETH_CODE: Clean D-cache before TX to ensure cache coherency */
+  for(q = p; q != NULL; q = q->next)
+  {
+    SCB_CleanDCache_by_Addr((uint32_t *)q->payload, q->len);
+  }
+
+  printf("TX: %u bytes\n", (unsigned int)p->tot_len);
+
   HAL_ETH_Transmit_IT(&heth, &TxConfig);
   while(osSemaphoreAcquire(TxPktSemaphore, TIME_WAITING_FOR_INPUT)!=osOK)
 
@@ -457,9 +494,11 @@ static struct pbuf * low_level_input(struct netif *netif)
 {
   struct pbuf *p = NULL;
 
+  printf("low_level_input: RxAllocStatus=%d\n", RxAllocStatus);
   if(RxAllocStatus == RX_ALLOC_OK)
   {
     HAL_ETH_ReadData(&heth, (void **)&p);
+    printf("low_level_input: got pbuf 0x%p\n", p);
   }
 
   return p;
@@ -479,6 +518,8 @@ void ethernetif_input(void* argument)
   struct pbuf *p = NULL;
   struct netif *netif = (struct netif *) argument;
 
+  printf("ethernetif_input thread started, netif=0x%p\n", netif);
+
   for( ;; )
   {
     if (osSemaphoreAcquire(RxPktSemaphore, TIME_WAITING_FOR_INPUT) == osOK)
@@ -488,6 +529,7 @@ void ethernetif_input(void* argument)
         p = low_level_input( netif );
         if (p != NULL)
         {
+          printf("RX: %u bytes\n", (unsigned int)p->tot_len);
           if (netif->input( p, netif) != ERR_OK )
           {
             pbuf_free(p);
@@ -584,6 +626,7 @@ err_t ethernetif_init(struct netif *netif)
   */
 void pbuf_free_custom(struct pbuf *p)
 {
+  printf("pbuf_free_custom: p=0x%p\n", p);
   struct pbuf_custom* custom_pbuf = (struct pbuf_custom*)p;
   LWIP_MEMPOOL_FREE(RX_POOL, custom_pbuf);
 
@@ -620,6 +663,12 @@ void HAL_ETH_MspInit(ETH_HandleTypeDef* ethHandle)
   /* USER CODE BEGIN ETH_MspInit 0 */
 
   /* USER CODE END ETH_MspInit 0 */
+    /* ETH_CODE: Enable SYSCFG clock for Ethernet RMII/MII selection */
+    __HAL_RCC_SYSCFG_CLK_ENABLE();
+    
+    /* ETH_CODE: Select RMII Interface */
+    HAL_SYSCFG_ETHInterfaceSelect(SYSCFG_ETH_RMII);
+
     /* Enable Peripheral clock */
     __HAL_RCC_ETH1MAC_CLK_ENABLE();
     __HAL_RCC_ETH1TX_CLK_ENABLE();
@@ -859,6 +908,28 @@ void ethernet_link_thread(void* argument)
       MACConf.Speed = speed;
       HAL_ETH_SetMACConfig(&heth, &MACConf);
       HAL_ETH_Start(&heth);
+      
+      /* ETH_CODE: Manually enable DMA interrupts to ensure they are properly configured
+       * This is needed because HAL_ETH_Start_IT() might not enable all required
+       * interrupts in some environments. */
+      printf("ETH: Enabling DMA interrupts...\n");
+      /* Enable RX DMA interrupts */
+      __HAL_ETH_DMA_ENABLE_IT(&heth, ETH_DMA_RX_IT | ETH_DMA_NORMAL_IT);
+      /* Enable TX DMA interrupts */
+      __HAL_ETH_DMA_ENABLE_IT(&heth, ETH_DMA_TX_IT | ETH_DMA_NORMAL_IT);
+      /* Enable MAC interrupts */
+      __HAL_ETH_MAC_ENABLE_IT(&heth, ETH_MAC_RX_STATUS_IT | ETH_MAC_TX_STATUS_IT);
+      printf("ETH: DMACIER = 0x%08lx, MACIER = 0x%08lx\n",
+             (unsigned long)heth.Instance->DMACIER, (unsigned long)heth.Instance->MACIER);
+      printf("ETH: DMACSR  = 0x%08lx\n", (unsigned long)heth.Instance->DMACSR);
+      printf("ETH: SYSCFG_PMCR = 0x%08lx\n", (unsigned long)SYSCFG->PMCR);
+      printf("ETH: MACCR = 0x%08lx\n", (unsigned long)heth.Instance->MACCR);
+      printf("RX Desc 0: 0x%08lx 0x%08lx 0x%08lx 0x%08lx\n",
+             (unsigned long)DMARxDscrTab[0].DESC0,
+             (unsigned long)DMARxDscrTab[0].DESC1,
+             (unsigned long)DMARxDscrTab[0].DESC2,
+             (unsigned long)DMARxDscrTab[0].DESC3);
+      
       netif_set_up(netif);
       netif_set_link_up(netif);
     }
