@@ -13,4 +13,6 @@
 #define UDP_DEBUG LWIP_DBG_ON
 #define TCP_DEBUG LWIP_DBG_ON
 
+#define LWIP_ICMP 1
+
 #endif /* __LWIPBSPOPTS_H__ */

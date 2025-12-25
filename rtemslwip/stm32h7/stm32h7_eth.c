@@ -165,6 +165,8 @@ void pbuf_free_custom(struct pbuf *p);
 static void stm32h7_eth_interrupt_handler(void *arg)
 {
   EthIrqCount++;
+  /* Debug: Log interrupt entry */
+  printf("ETH IRQ: EthIrqCount=%lu\n", (unsigned long)EthIrqCount);
   HAL_ETH_IRQHandler(&heth);
 }
 
@@ -176,6 +178,7 @@ static void stm32h7_eth_interrupt_handler(void *arg)
 void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *handlerEth)
 {
   RxIrqCount++;
+  printf("ETH RX Callback: RxIrqCount=%lu\n", (unsigned long)RxIrqCount);
   sys_sem_signal(&RxPktSemaphore);
 }
 /**
@@ -231,24 +234,25 @@ static void low_level_init(struct netif *netif)
   MACAddr[2] = 0xE1;
   MACAddr[3] = 0x00;
   MACAddr[4] = 0x00;
-  MACAddr[5] = 0x01;
+  MACAddr[5] = 0x00;
   heth.Init.MACAddr = &MACAddr[0];
-  heth.Init.MediaInterface = HAL_ETH_RMII_MODE;
-  heth.Init.TxDesc = DMATxDscrTab;
-  heth.Init.RxDesc = DMARxDscrTab;
-  heth.Init.RxBuffLen = 1536;
+ heth.Init.MediaInterface = HAL_ETH_RMII_MODE;
+ heth.Init.TxDesc = DMATxDscrTab;
+ heth.Init.RxDesc = DMARxDscrTab;
+ heth.Init.RxBuffLen = 1536;
 
-  /* USER CODE END MACADDRESS */
-  
-  HAL_NVIC_SetPriority(ETH_IRQn, 0x7, 0);
-  HAL_NVIC_EnableIRQ(ETH_IRQn);
+ /* USER CODE END MACADDRESS */
+ 
+ /* Disable ETH interrupt before installing handler */
+ HAL_NVIC_DisableIRQ(ETH_IRQn);
 
-  printf("Ethernet MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+ printf("Ethernet MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
          MACAddr[0], MACAddr[1], MACAddr[2], MACAddr[3], MACAddr[4], MACAddr[5]);
 
   hal_eth_init_status = HAL_ETH_Init(&heth);
   
   if (hal_eth_init_status == HAL_OK) {
+    printf("Installing ETH interrupt handler for vector %lu...\n", (unsigned long)ETH_IRQn);
     rtems_status_code sc = rtems_interrupt_handler_install(
       ETH_IRQn,
       "ETH",
@@ -257,7 +261,13 @@ static void low_level_init(struct netif *netif)
       NULL
     );
     if (sc != RTEMS_SUCCESSFUL) {
+      printf("ERROR: Failed to install ETH interrupt handler: %d\n", (int)sc);
       hal_eth_init_status = HAL_ERROR;
+    } else {
+      printf("ETH interrupt handler installed successfully\n");
+      /* Enable ETH interrupt after successful handler installation */
+      HAL_NVIC_SetPriority(ETH_IRQn, 0x7, 0);
+      HAL_NVIC_EnableIRQ(ETH_IRQn);
     }
   }
 
@@ -344,6 +354,7 @@ static void low_level_init(struct netif *netif)
   LAN8742.DevAddr = 0;
   LAN8742.Is_Initialized = 0;
   LAN8742_RegisterBusIO(&LAN8742, &LAN8742_IOCtx);
+  LAN8742_Init(&LAN8742);
 
   if (hal_eth_init_status != HAL_OK)
   {
@@ -645,9 +656,8 @@ void HAL_ETH_MspInit(ETH_HandleTypeDef* ethHandle)
     GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
     HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
-    /* Peripheral interrupt init */
-    HAL_NVIC_SetPriority(ETH_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(ETH_IRQn);
+    /* Peripheral interrupt init - moved to low_level_init() after handler installation */
+    /* NVIC configuration is now done in low_level_init() to ensure proper sequence */
   /* USER CODE BEGIN ETH_MspInit 1 */
 
   /* USER CODE END ETH_MspInit 1 */
@@ -801,10 +811,42 @@ void ethernet_link_thread(void* argument)
       /* Link is Up according to hardware */
       if (!netif_is_link_up(netif)) {
         printf("PHY: Link Up detected (BSR=0x%04lx)\n", (unsigned long)bsr);
-        
-        /* Fixed 100M Full Duplex for now to ensure connectivity */
-        speed = ETH_SPEED_100M;
-        duplex = ETH_FULLDUPLEX_MODE;
+
+        /* Get negotiated speed and duplex */
+        int32_t linkState = LAN8742_GetLinkState(&LAN8742);
+        switch (linkState) {
+          case LAN8742_STATUS_100MBITS_FULLDUPLEX:
+            speed = ETH_SPEED_100M;
+            duplex = ETH_FULLDUPLEX_MODE;
+            printf("Negotiated: 100Mbps Full Duplex\n");
+            break;
+          case LAN8742_STATUS_100MBITS_HALFDUPLEX:
+            speed = ETH_SPEED_100M;
+            duplex = ETH_HALFDUPLEX_MODE;
+            printf("Negotiated: 100Mbps Half Duplex\n");
+            break;
+          case LAN8742_STATUS_10MBITS_FULLDUPLEX:
+            speed = ETH_SPEED_10M;
+            duplex = ETH_FULLDUPLEX_MODE;
+            printf("Negotiated: 10Mbps Full Duplex\n");
+            break;
+          case LAN8742_STATUS_10MBITS_HALFDUPLEX:
+            speed = ETH_SPEED_10M;
+            duplex = ETH_HALFDUPLEX_MODE;
+            printf("Negotiated: 10Mbps Half Duplex\n");
+            break;
+          case LAN8742_STATUS_AUTONEGO_NOTDONE:
+            printf("Auto-negotiation not done yet\n");
+            /* Fall back to 100M Full Duplex */
+            speed = ETH_SPEED_100M;
+            duplex = ETH_FULLDUPLEX_MODE;
+            break;
+          default:
+            printf("Unknown link state: %ld, using 100M Full Duplex\n", (long)linkState);
+            speed = ETH_SPEED_100M;
+            duplex = ETH_FULLDUPLEX_MODE;
+            break;
+        }
         
         LOCK_TCPIP_CORE();
         HAL_ETH_GetMACConfig(&heth, &MACConf);
@@ -813,10 +855,24 @@ void ethernet_link_thread(void* argument)
         HAL_ETH_SetMACConfig(&heth, &MACConf);
         
         HAL_ETH_Start_IT(&heth);
+        
+        /* ETH_CODE: Manually enable DMA interrupts to ensure they are properly configured
+         * This is needed because HAL_ETH_Start_IT() might not enable all required
+         * interrupts in the RTEMS environment. */
+        printf("ETH: Enabling DMA interrupts...\n");
+        /* Enable RX DMA interrupts */
+        __HAL_ETH_DMA_ENABLE_IT(&heth, ETH_DMA_RX_IT | ETH_DMA_NORMAL_IT);
+        /* Enable TX DMA interrupts */
+        __HAL_ETH_DMA_ENABLE_IT(&heth, ETH_DMA_TX_IT | ETH_DMA_NORMAL_IT);
+        /* Enable MAC interrupts */
+        __HAL_ETH_MAC_ENABLE_IT(&heth, ETH_MAC_RX_STATUS_IT | ETH_MAC_TX_STATUS_IT);
+        printf("ETH: DMACIER = 0x%08lx, MACIER = 0x%08lx\n",
+               (unsigned long)heth.Instance->DMACIER, (unsigned long)heth.Instance->MACIER);
+        
         netif_set_up(netif);
         netif_set_link_up(netif);
         UNLOCK_TCPIP_CORE();
-        printf("Ethernet link is UP (100Mbps Full Duplex)\n");
+        printf("Ethernet link is UP\n");
       }
     } else {
       /* Link is Down according to hardware */
