@@ -936,7 +936,7 @@ void ethernet_link_thread(void* argument)
            * 24 (BUF1V): Buffer 1 is valid
            * Note: Bit 29 is also set as it was seen in previous code versions.
            */
-          DMARxDscrTab[i].DESC3 = 0x80000000 | 0x40000000 | 0x21000000 | 0x01000000;
+          DMARxDscrTab[i].DESC3 = 0x80000000 | 0x40000000 | 0x01000000;
           
           /* Ensure memory write is complete */
           __DSB();

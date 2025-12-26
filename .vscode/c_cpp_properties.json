@@ -1,0 +1,40 @@
+{
+    "configurations": [
+        {
+            "name": "RTEMS-STM32H7",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/rtemslwip/bsd_compat_include",
+                "${workspaceFolder}/lwip/src/include",
+                "${workspaceFolder}/rtemslwip/include/arch",
+                "${workspaceFolder}/rtemslwip/include",
+                "${workspaceFolder}/rtemslwip/stm32h7/include",
+                "${workspaceFolder}/incoming",
+                "${workspaceFolder}/rtemslwip/test",
+                "/opt/rtems/6.1/arm-rtems6/include",
+                "/opt/rtems/6.1/arm-rtems6/nucleo-h743zi/lib/include",
+                "/opt/rtems/6.1/lib/gcc/arm-rtems6/13.3.0/include",
+                "/opt/rtems/6.1/lib/gcc/arm-rtems6/13.3.0/include-fixed"
+            ],
+            "defines": [
+                "STM32H743xx",
+                "USE_HAL_DRIVER",
+                "__rtems__"
+            ],
+            "compilerPath": "/opt/rtems/6.1/bin/arm-rtems6-gcc",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-gcc-arm",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}",
+                    "/opt/rtems/6.1/arm-rtems6/include",
+                    "/opt/rtems/6.1/arm-rtems6/nucleo-h743zi/lib/include"
+                ],
+                "limitSymbolsToIncludedHeaders": false,
+                "databaseFilename": ""
+            }
+        }
+    ],
+    "version": 4
+}

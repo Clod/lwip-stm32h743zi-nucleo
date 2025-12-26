@@ -265,6 +265,15 @@ static void low_level_init(struct netif *netif)
   hal_eth_init_status = HAL_ETH_Init(&heth);
   
   if (hal_eth_init_status == HAL_OK) {
+    /* ETH_CODE: Manually commit descriptor list addresses to hardware registers.
+     * This is critical because the HAL version in this environment lacks 
+     * HAL_ETH_DMARxDescListInit and doesn't appear to commit them in HAL_ETH_Init. */
+    heth.Instance->DMACRDLAR = (uint32_t)heth.Init.RxDesc;
+    heth.Instance->DMACTDLAR = (uint32_t)heth.Init.TxDesc;
+    __DSB();
+    printf("ETH: DMA Descriptors committed to hardware: RX=0x%08lx, TX=0x%08lx\n",
+           (unsigned long)heth.Instance->DMACRDLAR, (unsigned long)heth.Instance->DMACTDLAR);
+
     printf("Installing ETH interrupt handler for vector %lu...\n", (unsigned long)ETH_IRQn);
     rtems_status_code sc = rtems_interrupt_handler_install(
       ETH_IRQn,
@@ -618,16 +627,28 @@ void HAL_ETH_MspInit(ETH_HandleTypeDef* ethHandle)
     /* Enable SYSCFG clock for Ethernet RMII/MII selection */
     __HAL_RCC_SYSCFG_CLK_ENABLE();
     
+    /* Select RMII Interface BEFORE enabling ETH clocks */
+    HAL_SYSCFG_ETHInterfaceSelect(SYSCFG_ETH_RMII);
+
     /* ETH_CODE: Enable I/O Compensation Cell for high-speed GPIO (RMII) */
     HAL_EnableCompensationCell();
-
-    /* Select RMII Interface */
-    HAL_SYSCFG_ETHInterfaceSelect(SYSCFG_ETH_RMII);
+    
+    /* Wait for I/O Compensation Cell to be ready (with timeout to prevent hang) */
+    uint32_t timeout = 0xFFFF;
+    while (!(SYSCFG->CCCSR & SYSCFG_CCCSR_READY) && timeout--);
+    
+    if (timeout == 0) {
+      printf("WARNING: I/O Compensation Cell not ready!\n");
+    }
 
     /* Enable Peripheral clock */
     __HAL_RCC_ETH1MAC_CLK_ENABLE();
     __HAL_RCC_ETH1TX_CLK_ENABLE();
     __HAL_RCC_ETH1RX_CLK_ENABLE();
+    
+    /* Small delay for clocks and RMII data path to stabilize */
+    for(volatile int i = 0; i < 100000; i++);
+
 
     /* ETH_CODE: Enable D2 SRAM clocks for descriptors and buffers */
     __HAL_RCC_D2SRAM1_CLK_ENABLE();
@@ -876,16 +897,9 @@ void ethernet_link_thread(void* argument)
         MACConf.Speed = speed;
         HAL_ETH_SetMACConfig(&heth, &MACConf);
         
-        if (HAL_ETH_Start_IT(&heth) != HAL_OK) {
-          printf("ERROR: HAL_ETH_Start_IT failed!\n");
-        } else {
-          printf("HAL_ETH_Start_IT successful\n");
-        }
-        
         /* ETH_CODE: Manually populate and set BUF1V/OWN bits in RX descriptors
-         * The HAL library's initialization might not properly allocate buffers
-         * to descriptors. We ensure each descriptor has a valid buffer from the pool,
-         * is owned by the DMA, and triggers an interrupt on completion. */
+         * BEFORE starting the DMA. This ensures the hardware sees "Ready" 
+         * descriptors immediately upon activation. */
         printf("ETH: Manually initializing RX descriptors...\n");
         for (uint32_t i = 0; i < ETH_RX_DESC_CNT; i++) {
           uint8_t *ptr = NULL;
@@ -895,23 +909,25 @@ void ethernet_link_thread(void* argument)
             /* Set bits: 
              * 31 (OWN): DMA owns the descriptor
              * 30 (IOC): Interrupt On Completion
-             * 25 (BUF2V): Buffer 2 is valid
              * 24 (BUF1V): Buffer 1 is valid
-             * Note: Bit 29 is also set as it was seen in previous code versions.
              */
-            DMARxDscrTab[i].DESC3 = 0x80000000 | 0x40000000 | 0x21000000 | 0x01000000;
+            DMARxDscrTab[i].DESC3 = 0x80000000 | 0x40000000 | 0x01000000;
             
             /* Ensure memory write is complete */
             __DSB();
-            printf("RX Desc %lu: addr=0x%08lx, DESC3=0x%08lx\n", 
-                   (unsigned long)i, (unsigned long)DMARxDscrTab[i].DESC0, (unsigned long)DMARxDscrTab[i].DESC3);
           } else {
             printf("ERROR: Failed to allocate buffer for RX descriptor %lu!\n", (unsigned long)i);
           }
         }
         printf("ETH: RX descriptors initialized successfully\n");
+
+        if (HAL_ETH_Start_IT(&heth) != HAL_OK) {
+          printf("ERROR: HAL_ETH_Start_IT failed!\n");
+        } else {
+          printf("HAL_ETH_Start_IT successful\n");
+        }
         
-        /* ETH_CODE: Manually enable DMA interrupts to ensure they are properly configured
+        /* ETH_CODE: Manually enable DMA interrupts to ensure they are properly configured */
          * This is needed because HAL_ETH_Start_IT() might not enable all required
          * interrupts in the RTEMS environment. */
         printf("ETH: Enabling DMA interrupts...\n");
