@@ -44,6 +44,14 @@
 #define LWIP_COMPAT_MUTEX 0
 #define LWIP_ALLOW_MEM_FREE_FROM_OTHER_CONTEXT 1
 
+#ifndef LWIP_NETIF_LINK_CALLBACK
+#define LWIP_NETIF_LINK_CALLBACK 1
+#endif
+
+/* Workaround for GCC 10+ common sections issue with errno */
+#undef LWIP_PROVIDE_ERRNO
+#define LWIP_ERRNO_STDINCLUDE
+
 #include <lwipbspopts.h>
 
 /* Sane defaults that the configuration or BSP can override */

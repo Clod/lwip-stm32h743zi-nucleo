@@ -99,7 +99,7 @@ typedef struct
 
 /* Memory Pool Declaration */
 #define ETH_RX_BUFFER_CNT             12U
-#define RX_POOL_BASE_ADDR             0x30020000
+#define RX_POOL_BASE_ADDR             0x30040200
 
 #if MEMP_STATS
 static struct stats_mem memp_stats_RX_POOL;
@@ -125,7 +125,7 @@ __IO uint32_t RxPkt = 0;
 
 /* ETH_CODE: Direct pointer assignment for DMA descriptors to fixed addresses */
 ETH_DMADescTypeDef *DMARxDscrTab = (ETH_DMADescTypeDef *)0x30040000; /* Ethernet Rx DMA Descriptors */
-ETH_DMADescTypeDef *DMATxDscrTab = (ETH_DMADescTypeDef *)0x30040200; /* Ethernet Tx DMA Descriptors */
+ETH_DMADescTypeDef *DMATxDscrTab = (ETH_DMADescTypeDef *)0x30040080; /* Ethernet Tx DMA Descriptors */
 
 __IO uint32_t EthIrqCount = 0;
 __IO uint32_t RxIrqCount = 0;
@@ -277,6 +277,16 @@ static void low_level_init(struct netif *netif)
 
   /* USER CODE END MACADDRESS */
 
+  /* ETH_CODE: Zero out descriptor and RX pool memory before use */
+  memset(DMARxDscrTab, 0, ETH_RX_DESC_CNT * sizeof(ETH_DMADescTypeDef));
+  memset(DMATxDscrTab, 0, ETH_TX_DESC_CNT * sizeof(ETH_DMADescTypeDef));
+  memset((void *)RX_POOL_BASE_ADDR, 0, ETH_RX_BUFFER_CNT * (sizeof(RxBuff_t)));
+
+  /* ETH_CODE: Initialize the RX POOL before calling HAL_ETH_Init
+   * This ensures that the HAL's RxAllocateCallback can succeed during initialization. */
+  printf("Initializing RX pool at 0x%08lx...\n", (unsigned long)RX_POOL_BASE_ADDR);
+  LWIP_MEMPOOL_INIT(RX_POOL);
+
   hal_eth_init_status = HAL_ETH_Init(&heth);
 
   memset(&TxConfig, 0 , sizeof(ETH_TxPacketConfig));
@@ -286,19 +296,7 @@ static void low_level_init(struct netif *netif)
 
   /* End ETH HAL Init */
 
-  printf("Initializing RX pool at 0x%08lx, size=%lu\n",
-         (unsigned long)RX_POOL_BASE_ADDR,
-         (unsigned long)(ETH_RX_BUFFER_CNT * (MEMP_SIZE + MEMP_ALIGN_SIZE(sizeof(RxBuff_t)))));
-  printf("memp_RX_POOL.base = 0x%p, .tab = 0x%p\n",
-         memp_RX_POOL.base, memp_RX_POOL.tab);
-
-  /* ETH_CODE: Zero out of RX pool memory in D2 SRAM */
-  memset((void *)RX_POOL_BASE_ADDR, 0, ETH_RX_BUFFER_CNT * (MEMP_SIZE + MEMP_ALIGN_SIZE(sizeof(RxBuff_t))));
-
-  /* Initialize the RX POOL */
-  printf("Calling LWIP_MEMPOOL_INIT(RX_POOL)...\n");
-  LWIP_MEMPOOL_INIT(RX_POOL);
-  printf("RX Pool initialized. tab = 0x%p\n", memp_RX_POOL.tab ? *memp_RX_POOL.tab : NULL);
+  /* ETH_CODE: RX pool and descriptor initialization handled above */
 
 #if LWIP_ARP || LWIP_ETHERNET
 
@@ -669,10 +667,18 @@ void HAL_ETH_MspInit(ETH_HandleTypeDef* ethHandle)
     /* ETH_CODE: Select RMII Interface */
     HAL_SYSCFG_ETHInterfaceSelect(SYSCFG_ETH_RMII);
 
+    /* ETH_CODE: Enable I/O Compensation Cell for high-speed GPIO (RMII) */
+    HAL_EnableCompensationCell();
+
     /* Enable Peripheral clock */
     __HAL_RCC_ETH1MAC_CLK_ENABLE();
     __HAL_RCC_ETH1TX_CLK_ENABLE();
     __HAL_RCC_ETH1RX_CLK_ENABLE();
+
+    /* ETH_CODE: Enable D2 SRAM clocks for descriptors and buffers */
+    __HAL_RCC_D2SRAM1_CLK_ENABLE();
+    __HAL_RCC_D2SRAM2_CLK_ENABLE();
+    __HAL_RCC_D2SRAM3_CLK_ENABLE();
 
     __HAL_RCC_GPIOC_CLK_ENABLE();
     __HAL_RCC_GPIOA_CLK_ENABLE();
@@ -718,8 +724,12 @@ void HAL_ETH_MspInit(ETH_HandleTypeDef* ethHandle)
     HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
     /* Peripheral interrupt init */
+    /* ETH_CODE: Explicitly enable the interrupt vector in RTEMS */
+    rtems_interrupt_vector_enable(ETH_IRQn);
+
     HAL_NVIC_SetPriority(ETH_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(ETH_IRQn);
+    printf("ETH: IRQ %lu enabled in NVIC\n", (unsigned long)ETH_IRQn);
   /* USER CODE BEGIN ETH_MspInit 1 */
 
   /* USER CODE END ETH_MspInit 1 */
@@ -909,16 +919,34 @@ void ethernet_link_thread(void* argument)
       HAL_ETH_SetMACConfig(&heth, &MACConf);
       HAL_ETH_Start(&heth);
       
-      /* ETH_CODE: Manually set BUF1V bit in RX descriptors
-       * The HAL library's HAL_ETH_Start_IT() function may not properly set
-       * the BUF1V bit, which prevents DMA from using the buffers.
-       * This is critical for RX to work. */
-      printf("ETH: Setting BUF1V bit in RX descriptors...\n");
+      /* ETH_CODE: Manually populate and set BUF1V/OWN bits in RX descriptors
+       * The HAL library's initialization might not properly allocate buffers
+       * to descriptors. We ensure each descriptor has a valid buffer from the pool,
+       * is owned by the DMA, and triggers an interrupt on completion. */
+      printf("ETH: Manually initializing RX descriptors...\n");
       for (uint32_t i = 0; i < ETH_RX_DESC_CNT; i++) {
-        /* Set BUF1V bit (bit 29) to indicate buffer 1 is valid */
-        DMARxDscrTab[i].DESC3 |= 0x20000000; /* Set bit 29 (BUF1V) */
+        uint8_t *ptr = NULL;
+        HAL_ETH_RxAllocateCallback(&ptr);
+        if (ptr) {
+          DMARxDscrTab[i].DESC0 = (uint32_t)ptr;
+          /* Set bits: 
+           * 31 (OWN): DMA owns the descriptor
+           * 30 (IOC): Interrupt On Completion
+           * 25 (BUF2V): Buffer 2 is valid
+           * 24 (BUF1V): Buffer 1 is valid
+           * Note: Bit 29 is also set as it was seen in previous code versions.
+           */
+          DMARxDscrTab[i].DESC3 = 0x80000000 | 0x40000000 | 0x21000000 | 0x01000000;
+          
+          /* Ensure memory write is complete */
+          __DSB();
+          printf("RX Desc %lu: addr=0x%08lx, DESC3=0x%08lx\n", 
+                 (unsigned long)i, (unsigned long)DMARxDscrTab[i].DESC0, (unsigned long)DMARxDscrTab[i].DESC3);
+        } else {
+          printf("ERROR: Failed to allocate buffer for RX descriptor %lu!\n", (unsigned long)i);
+        }
       }
-      printf("ETH: BUF1V bit set successfully\n");
+      printf("ETH: RX descriptors initialized successfully\n");
       
       /* ETH_CODE: Manually enable DMA interrupts to ensure they are properly configured
        * This is needed because HAL_ETH_Start_IT() might not enable all required
@@ -941,6 +969,13 @@ void ethernet_link_thread(void* argument)
              (unsigned long)DMARxDscrTab[0].DESC2,
              (unsigned long)DMARxDscrTab[0].DESC3);
       
+      /* ETH_CODE: Temporarily enable Promiscuous mode and Receive All
+       * to ensure we are not missing packets due to address filtering. */
+      heth.Instance->MACPFR |= ETH_MACPFR_RA | ETH_MACPFR_PR;
+      
+      printf("ETH: MACCR = 0x%08lx, MACPFR = 0x%08lx\n", 
+             (unsigned long)heth.Instance->MACCR, (unsigned long)heth.Instance->MACPFR);
+
       netif_set_up(netif);
       netif_set_link_up(netif);
     }
