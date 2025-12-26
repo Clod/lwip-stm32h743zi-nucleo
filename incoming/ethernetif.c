@@ -909,6 +909,17 @@ void ethernet_link_thread(void* argument)
       HAL_ETH_SetMACConfig(&heth, &MACConf);
       HAL_ETH_Start(&heth);
       
+      /* ETH_CODE: Manually set BUF1V bit in RX descriptors
+       * The HAL library's HAL_ETH_Start_IT() function may not properly set
+       * the BUF1V bit, which prevents DMA from using the buffers.
+       * This is critical for RX to work. */
+      printf("ETH: Setting BUF1V bit in RX descriptors...\n");
+      for (uint32_t i = 0; i < ETH_RX_DESC_CNT; i++) {
+        /* Set BUF1V bit (bit 29) to indicate buffer 1 is valid */
+        DMARxDscrTab[i].DESC3 |= 0x20000000; /* Set bit 29 (BUF1V) */
+      }
+      printf("ETH: BUF1V bit set successfully\n");
+      
       /* ETH_CODE: Manually enable DMA interrupts to ensure they are properly configured
        * This is needed because HAL_ETH_Start_IT() might not enable all required
        * interrupts in some environments. */
