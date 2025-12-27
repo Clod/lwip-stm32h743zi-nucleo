@@ -200,6 +200,22 @@ void HAL_ETH_ErrorCallback(ETH_HandleTypeDef *handlerEth)
 {
   uint32_t dma_err = HAL_ETH_GetDMAError(handlerEth);
   printf("ETH Error Callback: DMA Error=0x%08lx\n", (unsigned long)dma_err);
+  
+  /* Diagnostic: Dump descriptor and HAL state on error */
+  printf("ETH Error: RxIdx=%lu, RxBuildIdx=%lu, RxBuildCnt=%lu\n", 
+         (unsigned long)handlerEth->RxDescList.RxDescIdx,
+         (unsigned long)handlerEth->RxDescList.RxBuildDescIdx,
+         (unsigned long)handlerEth->RxDescList.RxBuildDescCnt);
+  
+  for(int i=0; i<ETH_RX_DESC_CNT; i++) {
+    printf("RX Desc %d [0x%08lx]: 0x%08lx 0x%08lx 0x%08lx 0x%08lx\n", i,
+           (unsigned long)handlerEth->RxDescList.RxDesc[i],
+           (unsigned long)((ETH_DMADescTypeDef*)handlerEth->RxDescList.RxDesc[i])->DESC0,
+           (unsigned long)((ETH_DMADescTypeDef*)handlerEth->RxDescList.RxDesc[i])->DESC1,
+           (unsigned long)((ETH_DMADescTypeDef*)handlerEth->RxDescList.RxDesc[i])->DESC2,
+           (unsigned long)((ETH_DMADescTypeDef*)handlerEth->RxDescList.RxDesc[i])->DESC3);
+  }
+
   if((dma_err & ETH_DMACSR_RBU) == ETH_DMACSR_RBU)
   {
      printf("ETH Error: Receive Buffer Unavailable\n");
@@ -265,14 +281,47 @@ static void low_level_init(struct netif *netif)
   hal_eth_init_status = HAL_ETH_Init(&heth);
   
   if (hal_eth_init_status == HAL_OK) {
-    /* ETH_CODE: Manually commit descriptor list addresses to hardware registers.
+    /* Register callbacks required for HAL_ETH_ReadData and Transmit */
+    HAL_ETH_RegisterRxAllocateCallback(&heth, HAL_ETH_RxAllocateCallback);
+    HAL_ETH_RegisterTxFreeCallback(&heth, HAL_ETH_TxFreeCallback);
+
+    /* ETH_CODE: Manually commit descriptor list addresses and lengths to hardware registers.
      * This is critical because the HAL version in this environment lacks 
      * HAL_ETH_DMARxDescListInit and doesn't appear to commit them in HAL_ETH_Init. */
     heth.Instance->DMACRDLAR = (uint32_t)heth.Init.RxDesc;
+    heth.Instance->DMACRDRLR = ETH_RX_DESC_CNT - 1; /* Ring Length (N-1) */
+    
     heth.Instance->DMACTDLAR = (uint32_t)heth.Init.TxDesc;
+    heth.Instance->DMACTDRLR = ETH_TX_DESC_CNT - 1; /* Ring Length (N-1) */
+    
     __DSB();
+
+    /* ETH_CODE: Manually initialize the internal HAL descriptor list wrappers.
+     * The H7 HAL uses these trackers for ReadData/Transmit operations. 
+     * We must populate build indices as well for HAL_ETH_ReadData to function. */
+    memset(&heth.RxDescList, 0, sizeof(ETH_RxDescListTypeDef));
+    heth.RxDescList.RxDescCnt = ETH_RX_DESC_CNT;
+    heth.RxDescList.RxDescIdx = 0;
+    heth.RxDescList.RxBuildDescIdx = 0;
+    heth.RxDescList.RxBuildDescCnt = 0; /* Will be incremented during buffer allocation */
+    heth.RxDescList.pRxStart = &DMARxDscrTab[0];
+    heth.RxDescList.pRxEnd = &DMARxDscrTab[ETH_RX_DESC_CNT-1];
+
+    for(int i = 0; i < ETH_RX_DESC_CNT; i++) {
+        heth.RxDescList.RxDesc[i] = (uint32_t)&DMARxDscrTab[i];
+    }
+    
+    memset(&heth.TxDescList, 0, sizeof(ETH_TxDescListTypeDef));
+    heth.TxDescList.CurTxDesc = 0;
+    for(int i = 0; i < ETH_TX_DESC_CNT; i++) {
+        heth.TxDescList.TxDesc[i] = (uint32_t)&DMATxDscrTab[i];
+    }
+
+
+
     printf("ETH: DMA Descriptors committed to hardware: RX=0x%08lx, TX=0x%08lx\n",
            (unsigned long)heth.Instance->DMACRDLAR, (unsigned long)heth.Instance->DMACTDLAR);
+
 
     printf("Installing ETH interrupt handler for vector %lu...\n", (unsigned long)ETH_IRQn);
     rtems_status_code sc = rtems_interrupt_handler_install(
@@ -470,8 +519,14 @@ static struct pbuf * low_level_input(struct netif *netif)
   printf("low_level_input: RxAllocStatus=%d\n", RxAllocStatus);
   if(RxAllocStatus == RX_ALLOC_OK)
   {
-    HAL_ETH_ReadData(&heth, (void **)&p);
-    printf("low_level_input: got pbuf 0x%p\n", p);
+    HAL_StatusTypeDef status = HAL_ETH_ReadData(&heth, (void **)&p);
+    printf("low_level_input: HAL_ETH_ReadData status=%d, got pbuf 0x%p\n", (int)status, p);
+    
+    if (status != HAL_OK || p == NULL) {
+        /* Extra diagnostic on failure */
+        printf("low_level_input: FAIL! RxIdx=%lu, RxBuildCnt=%lu\n",
+               (unsigned long)heth.RxDescList.RxDescIdx, (unsigned long)heth.RxDescList.RxBuildDescCnt);
+    }
   }
 
   return p;
@@ -915,6 +970,10 @@ void ethernet_link_thread(void* argument)
             
             /* Ensure memory write is complete */
             __DSB();
+            
+            /* ETH_CODE: Update HAL internal tracking to match the new packet buffer availability */
+            heth.RxDescList.RxBuildDescCnt++;
+            heth.RxDescList.RxBuildDescIdx = (heth.RxDescList.RxBuildDescIdx + 1) % ETH_RX_DESC_CNT;
           } else {
             printf("ERROR: Failed to allocate buffer for RX descriptor %lu!\n", (unsigned long)i);
           }
@@ -927,7 +986,7 @@ void ethernet_link_thread(void* argument)
           printf("HAL_ETH_Start_IT successful\n");
         }
         
-        /* ETH_CODE: Manually enable DMA interrupts to ensure they are properly configured */
+        /* ETH_CODE: Manually enable DMA interrupts to ensure they are properly configured
          * This is needed because HAL_ETH_Start_IT() might not enable all required
          * interrupts in the RTEMS environment. */
         printf("ETH: Enabling DMA interrupts...\n");
