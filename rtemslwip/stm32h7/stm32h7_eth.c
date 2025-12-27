@@ -123,11 +123,25 @@ const struct memp_desc memp_RX_POOL = {
 /* Variable Definitions */
 static uint8_t RxAllocStatus;
 
+/* ETH_CODE: The system HAL header defines ETH_DMADescTypeDef as 24 bytes, 
+ * but the H7 hardware REQUIRES 32-byte (8-word) alignment/spacing for 
+ * descriptors in enhanced mode. We define a shadow struct to force 32-byte stride. */
+typedef struct
+{
+  __IO uint32_t DESC0;
+  __IO uint32_t DESC1;
+  __IO uint32_t DESC2;
+  __IO uint32_t DESC3;
+  uint32_t BackupAddr0;
+  uint32_t BackupAddr1;
+  uint32_t Reserved[2];
+} ETH_DMADescTypeDef_Shadow;
+
 __IO uint32_t TxPkt = 0;
 __IO uint32_t RxPkt = 0;
 
-ETH_DMADescTypeDef *DMARxDscrTab = (ETH_DMADescTypeDef *)0x30040000; /* Ethernet Rx DMA Descriptors */
-ETH_DMADescTypeDef *DMATxDscrTab = (ETH_DMADescTypeDef *)0x30040080; /* Ethernet Tx DMA Descriptors */
+ETH_DMADescTypeDef_Shadow *DMARxDscrTab = (ETH_DMADescTypeDef_Shadow *)0x30040000; /* Ethernet Rx DMA Descriptors */
+ETH_DMADescTypeDef_Shadow *DMATxDscrTab = (ETH_DMADescTypeDef_Shadow *)0x30040080; /* Ethernet Tx DMA Descriptors */
 
 __IO uint32_t EthIrqCount = 0;
 __IO uint32_t RxIrqCount = 0;
@@ -208,12 +222,13 @@ void HAL_ETH_ErrorCallback(ETH_HandleTypeDef *handlerEth)
          (unsigned long)handlerEth->RxDescList.RxBuildDescCnt);
   
   for(int i=0; i<ETH_RX_DESC_CNT; i++) {
+    ETH_DMADescTypeDef_Shadow *d = &DMARxDscrTab[i];
     printf("RX Desc %d [0x%08lx]: 0x%08lx 0x%08lx 0x%08lx 0x%08lx\n", i,
-           (unsigned long)handlerEth->RxDescList.RxDesc[i],
-           (unsigned long)((ETH_DMADescTypeDef*)handlerEth->RxDescList.RxDesc[i])->DESC0,
-           (unsigned long)((ETH_DMADescTypeDef*)handlerEth->RxDescList.RxDesc[i])->DESC1,
-           (unsigned long)((ETH_DMADescTypeDef*)handlerEth->RxDescList.RxDesc[i])->DESC2,
-           (unsigned long)((ETH_DMADescTypeDef*)handlerEth->RxDescList.RxDesc[i])->DESC3);
+           (unsigned long)d,
+           (unsigned long)d->DESC0,
+           (unsigned long)d->DESC1,
+           (unsigned long)d->DESC2,
+           (unsigned long)d->DESC3);
   }
 
   if((dma_err & ETH_DMACSR_RBU) == ETH_DMACSR_RBU)
@@ -270,8 +285,8 @@ static void low_level_init(struct netif *netif)
          MACAddr[0], MACAddr[1], MACAddr[2], MACAddr[3], MACAddr[4], MACAddr[5]);
 
   /* ETH_CODE: Zero out descriptor and RX pool memory before use */
-  memset(DMARxDscrTab, 0, ETH_RX_DESC_CNT * sizeof(ETH_DMADescTypeDef));
-  memset(DMATxDscrTab, 0, ETH_TX_DESC_CNT * sizeof(ETH_DMADescTypeDef));
+  memset(DMARxDscrTab, 0, ETH_RX_DESC_CNT * sizeof(ETH_DMADescTypeDef_Shadow));
+  memset(DMATxDscrTab, 0, ETH_TX_DESC_CNT * sizeof(ETH_DMADescTypeDef_Shadow));
   memset((void *)RX_POOL_BASE_ADDR, 0, ETH_RX_BUFFER_CNT * (sizeof(RxBuff_t)));
 
   /* ETH_CODE: Initialize the RX POOL before calling HAL_ETH_Init */
@@ -319,8 +334,10 @@ static void low_level_init(struct netif *netif)
 
 
 
-    printf("ETH: DMA Descriptors committed to hardware: RX=0x%08lx, TX=0x%08lx\n",
-           (unsigned long)heth.Instance->DMACRDLAR, (unsigned long)heth.Instance->DMACTDLAR);
+
+    printf("ETH: DMA Descriptors committed to hardware: RXaddr=0x%08lx, RXlen=%lu, TXaddr=0x%08lx, TXlen=%lu\n",
+           (unsigned long)heth.Instance->DMACRDLAR, (unsigned long)(heth.Instance->DMACRDRLR + 1),
+           (unsigned long)heth.Instance->DMACTDLAR, (unsigned long)(heth.Instance->DMACTDRLR + 1));
 
 
     printf("Installing ETH interrupt handler for vector %lu...\n", (unsigned long)ETH_IRQn);
@@ -961,6 +978,11 @@ void ethernet_link_thread(void* argument)
           HAL_ETH_RxAllocateCallback(&ptr);
           if (ptr) {
             DMARxDscrTab[i].DESC0 = (uint32_t)ptr;
+            /* DESC2 bitfields for H7:
+             * [13:0]: Buffer 1 Length
+             * [30:16]: Buffer 2 Length
+             */
+            DMARxDscrTab[i].DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
             /* Set bits: 
              * 31 (OWN): DMA owns the descriptor
              * 30 (IOC): Interrupt On Completion
@@ -970,6 +992,10 @@ void ethernet_link_thread(void* argument)
             
             /* Ensure memory write is complete */
             __DSB();
+            
+            printf("RX Init Desc %lu: addr=0x%08lx, len=%lu, DESC3=0x%08lx\n",
+                   (unsigned long)i, (unsigned long)DMARxDscrTab[i].DESC0, 
+                   (unsigned long)DMARxDscrTab[i].DESC2, (unsigned long)DMARxDscrTab[i].DESC3);
             
             /* ETH_CODE: Update HAL internal tracking to match the new packet buffer availability */
             heth.RxDescList.RxBuildDescCnt++;
