@@ -272,8 +272,8 @@ static void low_level_init(struct netif *netif)
   MACAddr[5] = 0x00;
   heth.Init.MACAddr = &MACAddr[0];
  heth.Init.MediaInterface = HAL_ETH_RMII_MODE;
- heth.Init.TxDesc = DMATxDscrTab;
- heth.Init.RxDesc = DMARxDscrTab;
+ heth.Init.TxDesc = (ETH_DMADescTypeDef *)DMATxDscrTab;
+ heth.Init.RxDesc = (ETH_DMADescTypeDef *)DMARxDscrTab;
  heth.Init.RxBuffLen = 1536;
 
  /* USER CODE END MACADDRESS */
@@ -985,10 +985,10 @@ void ethernet_link_thread(void* argument)
             DMARxDscrTab[i].DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
             /* Set bits: 
              * 31 (OWN): DMA owns the descriptor
-             * 30 (IOC): Interrupt On Completion
              * 24 (BUF1V): Buffer 1 is valid
-             */
-            DMARxDscrTab[i].DESC3 = 0x80000000 | 0x40000000 | 0x01000000;
+             * Note: IOC (Bit 30) removed to avoid potential Context Descriptor 
+             * confusion during write-back in some hardware revisions. */
+            DMARxDscrTab[i].DESC3 = 0x80000000 | 0x01000000;
             
             /* Ensure memory write is complete */
             __DSB();
@@ -1037,8 +1037,15 @@ void ethernet_link_thread(void* argument)
          * to ensure we are not missing packets due to address filtering. */
         heth.Instance->MACPFR |= ETH_MACPFR_RA | ETH_MACPFR_PR;
         
-        printf("ETH: MACCR = 0x%08lx, MACPFR = 0x%08lx\n", 
-               (unsigned long)heth.Instance->MACCR, (unsigned long)heth.Instance->MACPFR);
+        /* ETH_CODE: Explicitly disable advanced features that could trigger Context Descriptors 
+         * (Timestamps, VLANs) to ensure the DMA only produces Normal descriptors. */
+        heth.Instance->MACTSCR &= ~(0x00000001); /* Disable Timestamp */
+        heth.Instance->MACVTR = 0;              /* Disable VLAN tagging (Correct register name: MACVTR) */
+
+        printf("ETH: MACCR = 0x%08lx, MACPFR = 0x%08lx, MACTSCR = 0x%08lx\n", 
+               (unsigned long)heth.Instance->MACCR, 
+               (unsigned long)heth.Instance->MACPFR,
+               (unsigned long)heth.Instance->MACTSCR);
 
         netif_set_up(netif);
         netif_set_link_up(netif);
@@ -1183,7 +1190,7 @@ static void MPU_Config(void)
   MPU_InitStruct.BaseAddress = 0x30000000;
   MPU_InitStruct.Size = MPU_REGION_SIZE_512KB;
   MPU_InitStruct.SubRegionDisable = 0x0;
-  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1; /* Normal property */
   MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
   MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
   MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
