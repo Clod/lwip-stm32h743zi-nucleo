@@ -299,6 +299,7 @@ static void low_level_init(struct netif *netif)
     /* Register callbacks required for HAL_ETH_ReadData and Transmit */
     HAL_ETH_RegisterRxAllocateCallback(&heth, HAL_ETH_RxAllocateCallback);
     HAL_ETH_RegisterTxFreeCallback(&heth, HAL_ETH_TxFreeCallback);
+    HAL_ETH_RegisterRxLinkCallback(&heth, HAL_ETH_RxLinkCallback);
 
     /* ETH_CODE: Manually commit descriptor list addresses and lengths to hardware registers.
      * This is critical because the HAL version in this environment lacks 
@@ -978,6 +979,11 @@ void ethernet_link_thread(void* argument)
           HAL_ETH_RxAllocateCallback(&ptr);
           if (ptr) {
             DMARxDscrTab[i].DESC0 = (uint32_t)ptr;
+            /* ETH_CODE: Store buffer address in BackupAddr0. 
+             * ALL STM32 HAL versions use this to retrieve the buffer address 
+             * independently of what the DMA writes back to DESC0. */
+            DMARxDscrTab[i].BackupAddr0 = (uint32_t)ptr;
+
             /* DESC2 bitfields for H7:
              * [13:0]: Buffer 1 Length
              * [30:16]: Buffer 2 Length
