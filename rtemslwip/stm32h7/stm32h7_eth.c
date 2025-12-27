@@ -176,6 +176,7 @@ lan8742_IOCtx_t  LAN8742_IOCtx = {ETH_PHY_IO_Init,
 
 /* Private functions ---------------------------------------------------------*/
 void pbuf_free_custom(struct pbuf *p);
+static void ethernetif_rebuild_rx_descriptors(void);
 
 static void stm32h7_eth_interrupt_handler(void *arg)
 {
@@ -216,7 +217,7 @@ void HAL_ETH_ErrorCallback(ETH_HandleTypeDef *handlerEth)
   printf("ETH Error Callback: DMA Error=0x%08lx\n", (unsigned long)dma_err);
   
   /* Diagnostic: Dump descriptor and HAL state on error */
-  printf("ETH Error: RxIdx=%lu, RxBuildIdx=%lu, RxBuildCnt=%lu\n", 
+  printf("ETH Error: RxIdx=%lu, RxBuildIdx=%lu, RxBuildCnt=%lu\n",
          (unsigned long)handlerEth->RxDescList.RxDescIdx,
          (unsigned long)handlerEth->RxDescList.RxBuildDescIdx,
          (unsigned long)handlerEth->RxDescList.RxBuildDescCnt);
@@ -234,6 +235,18 @@ void HAL_ETH_ErrorCallback(ETH_HandleTypeDef *handlerEth)
   if((dma_err & ETH_DMACSR_RBU) == ETH_DMACSR_RBU)
   {
      printf("ETH Error: Receive Buffer Unavailable\n");
+     
+     /* ETH_CODE: Do NOT rebuild descriptors here. 
+      * It causes a race condition where valid packets in the buffer 
+      * are overwritten before the application thread reads them.
+      * Just signal the thread to run.
+      */
+     // ethernetif_rebuild_rx_descriptors();
+     
+     /* Clear the RBU bit in the DMA status register */
+     __HAL_ETH_DMA_CLEAR_FLAG(handlerEth, ETH_DMACSR_RBU);
+     
+     /* Signal the input task to process any pending packets */
      sys_sem_signal(&RxPktSemaphore);
   }
 }
@@ -530,6 +543,58 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
  * @return a pbuf filled with the received packet (including MAC header)
  *         NULL on memory error
    */
+/* ETH_CODE: Function to rebuild RX descriptors and return them to DMA
+ * This is critical for preventing "Receive Buffer Unavailable" errors.
+ * After HAL_ETH_ReadData processes a packet, the descriptor must be
+ * returned to the DMA with a new buffer and OWN bit set. */
+static void ethernetif_rebuild_rx_descriptors(void)
+{
+  uint32_t idx = heth.RxDescList.RxDescIdx;
+  
+  /* Rebuild descriptors that have been processed (OWN=0) */
+  while ((DMARxDscrTab[idx].DESC3 & 0x80000000) == 0) {
+    uint8_t *ptr = NULL;
+    
+    /* Allocate a new buffer for this descriptor */
+    HAL_ETH_RxAllocateCallback(&ptr);
+    
+    if (ptr != NULL) {
+      /* Set the new buffer address */
+      DMARxDscrTab[idx].DESC0 = (uint32_t)ptr;
+      DMARxDscrTab[idx].BackupAddr0 = (uint32_t)ptr;
+      
+      /* Set buffer length */
+      DMARxDscrTab[idx].DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
+      
+      /* Return descriptor to DMA: set OWN and BUF1V bits */
+      DMARxDscrTab[idx].DESC3 = 0x80000000 | 0x01000000;
+      
+      /* Ensure memory write is visible to DMA */
+      __DSB();
+      
+      /* Update HAL tracking */
+      heth.RxDescList.RxBuildDescCnt++;
+      heth.RxDescList.RxBuildDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
+      
+      printf("Rebuilt RX desc %lu: addr=0x%08lx, DESC3=0x%08lx\n",
+             (unsigned long)idx, (unsigned long)DMARxDscrTab[idx].DESC0,
+             (unsigned long)DMARxDscrTab[idx].DESC3);
+    } else {
+      printf("ERROR: Failed to allocate buffer for RX descriptor rebuild %lu\n", (unsigned long)idx);
+      RxAllocStatus = RX_ALLOC_ERROR;
+      break;
+    }
+    
+    /* Move to next descriptor */
+    idx = (idx + 1) % ETH_RX_DESC_CNT;
+    
+    /* Safety: don't loop forever if all descriptors are already owned by DMA */
+    if (idx == heth.RxDescList.RxDescIdx) {
+      break;
+    }
+  }
+}
+
 static struct pbuf * low_level_input(struct netif *netif)
 {
   struct pbuf *p = NULL;
@@ -542,8 +607,57 @@ static struct pbuf * low_level_input(struct netif *netif)
     
     if (status != HAL_OK || p == NULL) {
         /* Extra diagnostic on failure */
-        printf("low_level_input: FAIL! RxIdx=%lu, RxBuildCnt=%lu\n",
-               (unsigned long)heth.RxDescList.RxDescIdx, (unsigned long)heth.RxDescList.RxBuildDescCnt);
+        printf("low_level_input: HAL_ETH_ReadData FAILED (stat=%d)! Trying manual read...\n", (int)status);
+        
+        /* ETH_CODE: Manual Packet Read Fallback 
+         * Check if the current descriptor is owned by CPU (Bit 31 = 0) */
+        uint32_t idx = heth.RxDescList.RxDescIdx;
+        ETH_DMADescTypeDef_Shadow *d = &DMARxDscrTab[idx];
+        
+        printf("Manual Check: Idx=%lu, DESC0=0x%08lx, DESC3=0x%08lx\n", 
+               (unsigned long)idx, (unsigned long)d->DESC0, (unsigned long)d->DESC3);
+        
+        if ((d->DESC3 & 0x80000000) == 0 && (d->DESC3 & 0x20000000) && (d->DESC3 & 0x10000000)) {
+             /* CPU owned + First Desc + Last Desc (Single packet) */
+             /* Remove unused len variable to fix warning */
+             
+             /* Re-reading H7 Reference Manual for RDES3 Write-Back:
+              * Bit 31: OWN
+              * Bit 30: CTXT
+              * Bit 29: FD
+              * Bit 28: LD
+              * Bits 14:0: Packet Length (PL)
+              */
+             uint32_t pkt_len = (d->DESC3 & 0x00007FFF);
+             
+             printf("Manual Read: Idx=%lu, Addr=0x%08lx, Len=%lu\n", (unsigned long)idx, (unsigned long)d->BackupAddr0, (unsigned long)pkt_len);
+             
+             /* Get the pbuf from the back-up address */
+             if (d->BackupAddr0 != 0) {
+                 uint8_t *buff = (uint8_t *)d->BackupAddr0;
+                 struct pbuf *p_manual = (struct pbuf *)(buff - offsetof(RxBuff_t, buff));
+                 p_manual->next = NULL;
+                 p_manual->tot_len = pkt_len;
+                 p_manual->len = pkt_len;
+                 
+                 /* Invalidate Cache */
+                 SCB_InvalidateDCache_by_Addr((uint32_t *)buff, pkt_len);
+                 
+                 p = p_manual;
+                 
+                 /* Update HAL tracking manually since we bypassed ReadData */
+                 heth.RxDescList.RxDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
+                 
+                 /* Rebuild descriptors immediately */
+                 ethernetif_rebuild_rx_descriptors();
+             }
+        } else {
+             printf("Manual Read: Desc not ready or weird state. DESC3=0x%08lx\n", (unsigned long)d->DESC3);
+        }
+    } else {
+        /* ETH_CODE: After successfully reading data, rebuild RX descriptors
+         * to return them to the DMA. This prevents "Receive Buffer Unavailable" errors. */
+        ethernetif_rebuild_rx_descriptors();
     }
   }
 
@@ -999,8 +1113,9 @@ void ethernet_link_thread(void* argument)
             /* Ensure memory write is complete */
             __DSB();
             
-            printf("RX Init Desc %lu: addr=0x%08lx, len=%lu, DESC3=0x%08lx\n",
+            printf("RX Init Desc %lu: addr=0x%08lx, bkup=0x%08lx, len=%lu, DESC3=0x%08lx\n",
                    (unsigned long)i, (unsigned long)DMARxDscrTab[i].DESC0, 
+                   (unsigned long)DMARxDscrTab[i].BackupAddr0,
                    (unsigned long)DMARxDscrTab[i].DESC2, (unsigned long)DMARxDscrTab[i].DESC3);
             
             /* ETH_CODE: Update HAL internal tracking to match the new packet buffer availability */
@@ -1016,6 +1131,10 @@ void ethernet_link_thread(void* argument)
           printf("ERROR: HAL_ETH_Start_IT failed!\n");
         } else {
           printf("HAL_ETH_Start_IT successful\n");
+          
+          /* ETH_CODE: internal "Kick" to DMA to poll RX descriptors immediately 
+           * by updating the Tail Pointer to the end of the ring/list. */
+          heth.Instance->DMACRDTPR = (uint32_t)heth.RxDescList.pRxEnd;
         }
         
         /* ETH_CODE: Manually enable DMA interrupts to ensure they are properly configured
