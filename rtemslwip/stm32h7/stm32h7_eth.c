@@ -177,13 +177,36 @@ lan8742_IOCtx_t  LAN8742_IOCtx = {ETH_PHY_IO_Init,
 /* Private functions ---------------------------------------------------------*/
 void pbuf_free_custom(struct pbuf *p);
 static void ethernetif_rebuild_rx_descriptors(void);
+static void stm32h7_recycle_rx_descriptor(uint32_t idx);
 
 static void stm32h7_eth_interrupt_handler(void *arg)
 {
   EthIrqCount++;
-  /* Debug: Log interrupt entry */
   printf("ETH IRQ: EthIrqCount=%lu\n", (unsigned long)EthIrqCount);
+  
+  /* ETH_CODE: Check if RBU error is pending and clear it FIRST.
+   * This prevents HAL_ETH_IRQHandler from re-triggering the error callback
+   * before we can recycle the descriptor. */
+  uint32_t dmacsr = heth.Instance->DMACSR;
+  if (dmacsr & ETH_DMACSR_RBU) {
+      printf("ETH IRQ: Pre-clear RBU (DMACSR=0x%08lx)\n", (unsigned long)dmacsr);
+      /* Clear RBU and AIS to prevent error callback loop */
+      heth.Instance->DMACSR = (ETH_DMACSR_RBU | ETH_DMACSR_AIS);
+  }
+  
   HAL_ETH_IRQHandler(&heth);
+   
+  /* ETH_CODE: After HAL processing, check if we need to kick the DMA again.
+   * If descriptors were recycled by the error callback, kick DMA to resume. */
+  dmacsr = heth.Instance->DMACSR;
+  if (dmacsr & ETH_DMACSR_RBU) {
+      /* RBU still set - kick DMA with tail pointer */
+      printf("ETH IRQ: Post-HAL RBU still set, kicking DMA\n");
+      heth.Instance->DMACRDTPR = (uint32_t)heth.RxDescList.pRxEnd;
+  }
+  
+  /* Signal RX semaphore to process any received packets */
+  sys_sem_signal(&RxPktSemaphore);
 }
 
 /**
@@ -236,15 +259,52 @@ void HAL_ETH_ErrorCallback(ETH_HandleTypeDef *handlerEth)
   {
      printf("ETH Error: Receive Buffer Unavailable\n");
      
-     /* ETH_CODE: Do NOT rebuild descriptors here. 
-      * It causes a race condition where valid packets in the buffer 
-      * are overwritten before the application thread reads them.
-      * Just signal the thread to run.
-      */
-     // ethernetif_rebuild_rx_descriptors();
+     /* ETH_CODE: Properly handle RBU by recycling the current descriptor.
+      * The DMA has written back a descriptor but we need to recycle it. */
      
-     /* Clear the RBU bit in the DMA status register */
-     __HAL_ETH_DMA_CLEAR_FLAG(handlerEth, ETH_DMACSR_RBU);
+     /* Check if we have a CPU-owned descriptor to recycle */
+     uint32_t idx = handlerEth->RxDescList.RxDescIdx;
+     ETH_DMADescTypeDef_Shadow *d = &DMARxDscrTab[idx];
+     
+     /* Invalidate cache to read actual RAM value */
+     SCB_InvalidateDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
+     
+     printf("ETH RBU: Recycle Idx=%lu, DESC3=0x%08lx\n", (unsigned long)idx, (unsigned long)d->DESC3);
+     
+     /* Advance the read index for HAL */
+     handlerEth->RxDescList.RxDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
+     
+     /* Recycle the descriptor */
+     uint8_t *new_ptr = NULL;
+     HAL_ETH_RxAllocateCallback(&new_ptr);
+     
+     if (new_ptr) {
+         d->DESC0 = (uint32_t)new_ptr;
+         d->BackupAddr0 = (uint32_t)new_ptr;
+         d->DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
+         d->DESC3 = 0x80000000 | 0x01000000; /* OWN + BUF1V */
+         
+         /* Flush cache */
+         SCB_CleanDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
+         __DSB();
+         
+         /* Update HAL tracking */
+         handlerEth->RxDescList.RxBuildDescCnt++;
+         handlerEth->RxDescList.RxBuildDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
+         
+         printf("ETH RBU: Recycled desc %lu\n", (unsigned long)idx);
+     } else {
+         printf("ETH RBU: Failed to allocate buffer for recycle!\n");
+     }
+     
+     /* Clear the RBU bit and other status bits */
+     handlerEth->Instance->DMACSR = (ETH_DMACSR_RBU | ETH_DMACSR_AIS);
+     
+     /* Kick the DMA to resume reception */
+     handlerEth->Instance->DMACRDTPR = (uint32_t)handlerEth->RxDescList.pRxEnd;
+     
+     printf("ETH RBU: DMA kicked, DMACRDTPR=0x%08lx\n",
+            (unsigned long)handlerEth->Instance->DMACRDTPR);
      
      /* Signal the input task to process any pending packets */
      sys_sem_signal(&RxPktSemaphore);
@@ -328,13 +388,17 @@ static void low_level_init(struct netif *netif)
     /* ETH_CODE: Manually initialize the internal HAL descriptor list wrappers.
      * The H7 HAL uses these trackers for ReadData/Transmit operations. 
      * We must populate build indices as well for HAL_ETH_ReadData to function. */
-    memset(&heth.RxDescList, 0, sizeof(ETH_RxDescListTypeDef));
-    heth.RxDescList.RxDescCnt = ETH_RX_DESC_CNT;
-    heth.RxDescList.RxDescIdx = 0;
-    heth.RxDescList.RxBuildDescIdx = 0;
+     memset(&heth.RxDescList, 0, sizeof(ETH_RxDescListTypeDef));
+     
+     /* ETH_CODE: Initialize Start and End pointers for RxDescList 
+      * This is crucial for DMACRDTPR (Tail Pointer) updates to work correctly! */
+     heth.RxDescList.pRxStart = (ETH_DMADescTypeDef *)DMARxDscrTab;
+     heth.RxDescList.pRxEnd   = (ETH_DMADescTypeDef *)&DMARxDscrTab[ETH_RX_DESC_CNT - 1];
+     
+     heth.RxDescList.RxDescCnt = ETH_RX_DESC_CNT;
+     heth.RxDescList.RxDescIdx = 0;
+     heth.RxDescList.RxBuildDescIdx = 0;
     heth.RxDescList.RxBuildDescCnt = 0; /* Will be incremented during buffer allocation */
-    heth.RxDescList.pRxStart = &DMARxDscrTab[0];
-    heth.RxDescList.pRxEnd = &DMARxDscrTab[ETH_RX_DESC_CNT-1];
 
     for(int i = 0; i < ETH_RX_DESC_CNT; i++) {
         heth.RxDescList.RxDesc[i] = (uint32_t)&DMARxDscrTab[i];
@@ -528,7 +592,11 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
   printf("TX: %u bytes\n", (unsigned int)p->tot_len);
 
   HAL_ETH_Transmit_IT(&heth, &TxConfig);
+  
+  /* Log before wait */
+  // printf("TX: Waiting for semaphore...\n");
   sys_arch_sem_wait(&TxPktSemaphore, TIME_WAITING_FOR_INPUT);
+  // printf("TX: Semaphore acquired.\n");
 
   HAL_ETH_ReleaseTxPacket(&heth);
 
@@ -549,10 +617,49 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
  * returned to the DMA with a new buffer and OWN bit set. */
 static void ethernetif_rebuild_rx_descriptors(void)
 {
-  uint32_t idx = heth.RxDescList.RxDescIdx;
+  /* Use RxBuildDescIdx (Refill Pointer) to start searching for empty descriptors.
+   * Using RxDescIdx (Read Pointer) is wrong because passing the read pointer
+   * skips the descriptor we just consumed! */
+  uint32_t idx = heth.RxDescList.RxBuildDescIdx;
+  
+  printf("Rebuild Loop: Start Idx=%lu\n", (unsigned long)idx);
   
   /* Rebuild descriptors that have been processed (OWN=0) */
-  while ((DMARxDscrTab[idx].DESC3 & 0x80000000) == 0) {
+  while (1) {
+    /* ETH_CODE: Invalidate Cache to ensure we read actual RAM value */
+    SCB_InvalidateDCache_by_Addr((uint32_t *)&DMARxDscrTab[idx], sizeof(ETH_DMADescTypeDef_Shadow));
+    
+    if ((DMARxDscrTab[idx].DESC3 & 0x80000000) != 0) {
+      /* Descriptor is still owned by DMA (OWN=1). We caught up. */
+       printf("Rebuild: Idx=%lu is DMA owned (DESC3=0x%08lx). Stop.\n",
+              (unsigned long)idx, (unsigned long)DMARxDscrTab[idx].DESC3);
+       break;
+    }
+    
+    /* ETH_CODE: Handle Context Descriptors (CTXT=1)
+     * Context descriptors don't have packet data and should be recycled directly.
+     * They have OWN=0 and CTXT=1 but don't have FD (First Desc) or LD (Last Desc) set
+     * for packet data. */
+    if ((DMARxDscrTab[idx].DESC3 & 0x40000000) != 0) {
+        printf("Rebuild: Idx=%lu is Context Descriptor (CTXT=1), recycling...\n", (unsigned long)idx);
+        /* Allocate a new buffer and recycle this descriptor */
+        uint8_t *ptr = NULL;
+        HAL_ETH_RxAllocateCallback(&ptr);
+        if (ptr) {
+            DMARxDscrTab[idx].DESC0 = (uint32_t)ptr;
+            DMARxDscrTab[idx].BackupAddr0 = (uint32_t)ptr;
+            DMARxDscrTab[idx].DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
+            DMARxDscrTab[idx].DESC3 = 0x80000000 | 0x01000000; /* OWN + BUF1V */
+            SCB_CleanDCache_by_Addr((uint32_t *)&DMARxDscrTab[idx], sizeof(ETH_DMADescTypeDef_Shadow));
+            __DSB();
+            heth.RxDescList.RxBuildDescCnt++;
+            heth.RxDescList.RxBuildDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
+        }
+        idx = (idx + 1) % ETH_RX_DESC_CNT;
+        if (idx == heth.RxDescList.RxBuildDescIdx) break;
+        continue;
+    }
+
     uint8_t *ptr = NULL;
     
     /* Allocate a new buffer for this descriptor */
@@ -570,6 +677,7 @@ static void ethernetif_rebuild_rx_descriptors(void)
       DMARxDscrTab[idx].DESC3 = 0x80000000 | 0x01000000;
       
       /* Ensure memory write is visible to DMA */
+      SCB_CleanDCache_by_Addr((uint32_t *)&DMARxDscrTab[idx], sizeof(ETH_DMADescTypeDef_Shadow));
       __DSB();
       
       /* Update HAL tracking */
@@ -588,11 +696,49 @@ static void ethernetif_rebuild_rx_descriptors(void)
     /* Move to next descriptor */
     idx = (idx + 1) % ETH_RX_DESC_CNT;
     
-    /* Safety: don't loop forever if all descriptors are already owned by DMA */
-    if (idx == heth.RxDescList.RxDescIdx) {
-      break;
-    }
+    /* Safety check involved in 'while(1)' loop */
+    if (idx == heth.RxDescList.RxBuildDescIdx) break; 
   }
+  
+  /* ETH_CODE: Update Tail Pointer to ensure DMA sees the new descriptors */
+  heth.Instance->DMACRDTPR = (uint32_t)heth.RxDescList.pRxEnd;
+}
+
+/**
+ * Helper function to process/advance past a descriptor (packet or context)
+ * This is called when we have a CPU-owned descriptor that needs recycling
+ */
+static void stm32h7_recycle_rx_descriptor(uint32_t idx)
+{
+    ETH_DMADescTypeDef_Shadow *d = &DMARxDscrTab[idx];
+    
+    /* Allocate new buffer for this descriptor */
+    uint8_t *new_ptr = NULL;
+    HAL_ETH_RxAllocateCallback(&new_ptr);
+    
+    if (new_ptr) {
+        /* Update Descriptor */
+        d->DESC0 = (uint32_t)new_ptr;
+        d->BackupAddr0 = (uint32_t)new_ptr;
+        d->DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
+        
+        /* Ownership back to DMA */
+        d->DESC3 = 0x80000000 | 0x01000000;
+        
+        /* Flush Cache */
+        SCB_CleanDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
+        __DSB();
+        
+        /* Update HAL counters */
+        heth.RxDescList.RxBuildDescCnt++;
+        heth.RxDescList.RxBuildDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
+        heth.RxDescList.RxDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
+        
+        /* Kick DMA Tail Pointer */
+        heth.Instance->DMACRDTPR = (uint32_t)heth.RxDescList.pRxEnd;
+    } else {
+        printf("CRITICAL: Failed to recycle RX descriptor %lu\n", (unsigned long)idx);
+    }
 }
 
 static struct pbuf * low_level_input(struct netif *netif)
@@ -609,13 +755,27 @@ static struct pbuf * low_level_input(struct netif *netif)
         /* Extra diagnostic on failure */
         printf("low_level_input: HAL_ETH_ReadData FAILED (stat=%d)! Trying manual read...\n", (int)status);
         
-        /* ETH_CODE: Manual Packet Read Fallback 
+        /* ETH_CODE: Manual Packet Read Fallback
          * Check if the current descriptor is owned by CPU (Bit 31 = 0) */
         uint32_t idx = heth.RxDescList.RxDescIdx;
         ETH_DMADescTypeDef_Shadow *d = &DMARxDscrTab[idx];
         
-        printf("Manual Check: Idx=%lu, DESC0=0x%08lx, DESC3=0x%08lx\n", 
-               (unsigned long)idx, (unsigned long)d->DESC0, (unsigned long)d->DESC3);
+        /* ETH_CODE: Invalidate Cache BEFORE reading the descriptor!
+         * The thread might be seeing stale cache (0s) while DMA updated RAM. */
+        SCB_InvalidateDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
+        
+        printf("Manual Check: Idx=%lu, Addr=0x%08lx, DESC0=0x%08lx, DESC3=0x%08lx\n",
+               (unsigned long)idx, (unsigned long)d, (unsigned long)d->DESC0, (unsigned long)d->DESC3);
+        
+        /* ETH_CODE: Handle Context Descriptors (CTXT=1)
+         * Context descriptors contain metadata (timestamps, etc.) and don't have packet data.
+         * They must be recycled and skipped, not treated as packet descriptors. */
+        if ((d->DESC3 & 0x80000000) == 0 && (d->DESC3 & 0x40000000)) {
+            printf("Manual Read: Context descriptor detected (CTXT=1), recycling and skipping...\n");
+            /* Recycle this context descriptor and return NULL (no packet) */
+            stm32h7_recycle_rx_descriptor(idx);
+            return NULL;
+        }
         
         if ((d->DESC3 & 0x80000000) == 0 && (d->DESC3 & 0x20000000) && (d->DESC3 & 0x10000000)) {
              /* CPU owned + First Desc + Last Desc (Single packet) */
@@ -645,14 +805,61 @@ static struct pbuf * low_level_input(struct netif *netif)
                  
                  p = p_manual;
                  
-                 /* Update HAL tracking manually since we bypassed ReadData */
-                 heth.RxDescList.RxDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
+                 /* ETH_CODE: REFILL STRATEGY (INLINED)
+                  * We must immediately refill the current descriptor (idx) with a new buffer 
+                  * so the DMA can use it again. 
+                  */
                  
-                 /* Rebuild descriptors immediately */
-                 ethernetif_rebuild_rx_descriptors();
+                 /* Allocate new pbuf */
+                 uint8_t *new_ptr = NULL;
+                 HAL_ETH_RxAllocateCallback(&new_ptr);
+                 
+                 if (new_ptr) {
+                     /* Update Descriptor */
+                     d->DESC0 = (uint32_t)new_ptr;
+                     d->BackupAddr0 = (uint32_t)new_ptr;
+                     d->DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
+                     
+                     /* Ownership back to DMA */
+                     d->DESC3 = 0x80000000 | 0x01000000;
+                     
+                     /* Flush Cache */
+                     SCB_CleanDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
+                     __DSB();
+                     
+                     printf("Refilled Manual Desc %lu: Addr=0x%08lx, DESC3=0x%08lx\n", 
+                            (unsigned long)idx, (unsigned long)d->DESC0, (unsigned long)d->DESC3);
+                     
+                     /* Update HAL counters */
+                     heth.RxDescList.RxBuildDescCnt++;
+                     heth.RxDescList.RxBuildDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
+                     
+                     /* Kick DMA Tail Pointer just in case */
+                     heth.Instance->DMACRDTPR = (uint32_t)heth.RxDescList.pRxEnd;
+                 } else {
+                     printf("CRITICAL: Failed to refill Manual Desc %lu\n", (unsigned long)idx);
+                 }
+
+                 /* Update HAL Read Index */
+                 heth.RxDescList.RxDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
              }
         } else {
              printf("Manual Read: Desc not ready or weird state. DESC3=0x%08lx\n", (unsigned long)d->DESC3);
+             
+             /* ETH_CODE: Check if DMA has written a new packet (OWN=1)
+              * If so, advance RxDescIdx so HAL can process it on next call.
+              * This handles the case where RBU pre-clear prevents RX callback. */
+             if ((d->DESC3 & 0x80000000) != 0) {
+                 printf("Manual Read: DMA owned (new packet), advance RxDescIdx\n");
+                 heth.RxDescList.RxDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
+                 
+                 /* ETH_CODE: If we've advanced past all descriptors without reading,
+                  * we might have missed the RX callback. Force semaphore signal. */
+                 if (heth.RxDescList.RxDescIdx == heth.RxDescList.RxBuildDescIdx) {
+                     printf("Manual Read: Cycled through all descriptors, signal semaphore\n");
+                     sys_sem_signal(&RxPktSemaphore);
+                 }
+             }
         }
     } else {
         /* ETH_CODE: After successfully reading data, rebuild RX descriptors
@@ -1162,10 +1369,11 @@ void ethernet_link_thread(void* argument)
          * to ensure we are not missing packets due to address filtering. */
         heth.Instance->MACPFR |= ETH_MACPFR_RA | ETH_MACPFR_PR;
         
-        /* ETH_CODE: Explicitly disable advanced features that could trigger Context Descriptors 
+        /* ETH_CODE: Explicitly disable advanced features that could trigger Context Descriptors
          * (Timestamps, VLANs) to ensure the DMA only produces Normal descriptors. */
-        heth.Instance->MACTSCR &= ~(0x00000001); /* Disable Timestamp */
-        heth.Instance->MACVTR = 0;              /* Disable VLAN tagging (Correct register name: MACVTR) */
+        /* Disable Timestamp completely - must clear bit 0 to prevent context descriptors */
+        heth.Instance->MACTSCR = 0; /* Clear ALL timestamp settings to prevent CTXT descriptors */
+        heth.Instance->MACVTR = 0;  /* Disable VLAN tagging */
 
         printf("ETH: MACCR = 0x%08lx, MACPFR = 0x%08lx, MACTSCR = 0x%08lx\n", 
                (unsigned long)heth.Instance->MACCR, 
