@@ -94,10 +94,13 @@ typedef enum
   RX_ALLOC_ERROR    = 0x01
 } RxAllocStatusTypeDef;
 
-typedef struct
+/* ETH_CODE: Ensure RxBuff_t is aligned to 32 bytes for DMA compatibility.
+ * The struct includes pbuf_custom (16 bytes on ARM) + 32-byte aligned buffer.
+ * Total size must be multiple of 32 for proper memory pool alignment. */
+typedef struct __attribute__((aligned(32)))
 {
   struct pbuf_custom pbuf_custom;
-  uint8_t buff[(ETH_RX_BUFFER_SIZE + 31) & ~31] __ALIGNED(32);
+  uint8_t buff[ETH_RX_BUFFER_SIZE];
 } RxBuff_t;
 
 /* Memory Pool Manual Declaration (points to D2 SRAM) */
@@ -125,19 +128,19 @@ const struct memp_desc memp_RX_POOL = {
 /* Variable Definitions */
 static uint8_t RxAllocStatus;
 
-/* ETH_CODE: The system HAL header defines ETH_DMADescTypeDef as 24 bytes, 
- * but the H7 hardware REQUIRES 32-byte (8-word) alignment/spacing for 
- * descriptors in enhanced mode. We define a shadow struct to force 32-byte stride. */
-typedef struct
+/* ETH_CODE: The STM32H7 DMA expects exactly 16 bytes (4 words) per descriptor.
+ * We use a packed structure to match hardware requirements. */
+typedef struct __attribute__((packed))
 {
   __IO uint32_t DESC0;
   __IO uint32_t DESC1;
   __IO uint32_t DESC2;
   __IO uint32_t DESC3;
-  uint32_t BackupAddr0;
-  uint32_t BackupAddr1;
-  uint32_t Reserved[2];
 } ETH_DMADescTypeDef_Shadow;
+
+/* Separate array to store backup buffer addresses (DMA overwrites DESC0 on completion) */
+static uint32_t DMARxDscrBackup[ETH_RX_DESC_CNT];
+static uint32_t DMATxDscrBackup[ETH_TX_DESC_CNT];
 
 __IO uint32_t TxPkt = 0;
 __IO uint32_t RxPkt = 0;
@@ -184,20 +187,16 @@ static void stm32h7_recycle_rx_descriptor(uint32_t idx);
 /* Helper to kick the RX DMA tail pointer correctly for a ring */
 static void stm32h7_eth_kick_rx_dma(void)
 {
-    /* The tail pointer should always point to the descriptor "behind" the current read index.
-     * This effectively tells the DMA that the entire ring (minus one) is available.
-     * With 16 descriptors, this provides a massive buffer. */
-    uint32_t read_idx = heth.RxDescList.RxDescIdx;
-    uint32_t tail_idx = (read_idx == 0) ? (ETH_RX_DESC_CNT - 1) : (read_idx - 1);
-    
-    heth.Instance->DMACRDTPR = (uint32_t)&DMARxDscrTab[tail_idx];
+    /* ETH_CODE: FIX - The tail pointer must ALWAYS point to the LAST descriptor
+     * in the ring. This tells DMA "descriptors 0 to N-1 are available for use".
+     *
+     * Previous buggy code set Tail = ReadIdx - 1, which told DMA "stop before ReadIdx"
+     * causing RBU because DMA saw no available descriptors.
+     */
+    heth.Instance->DMACRDTPR = (uint32_t)&DMARxDscrTab[ETH_RX_DESC_CNT - 1];
     __DSB();
     
-    /* "Power Kick": Force the DMA to re-fetch the descriptor immediately.
-     * ETH_TypeDef in this HAL doesn't expose DMARPDR directly.
-     * DMACRDTPR is at offset 0x1048 (Channel 0).
-     * DMARPDR is at offset 0x104C (Channel 0).
-     * We manually access it relative to the base instance. */
+    /* Write Poll Demand to force immediate re-fetch of descriptors */
     *(__IO uint32_t *)((uint32_t)heth.Instance + 0x104C) = 0;
 }
 
@@ -660,7 +659,7 @@ static void ethernetif_rebuild_rx_descriptors(void)
         HAL_ETH_RxAllocateCallback(&ptr);
         if (ptr) {
             DMARxDscrTab[idx].DESC0 = (uint32_t)ptr;
-            DMARxDscrTab[idx].BackupAddr0 = (uint32_t)ptr;
+            DMARxDscrBackup[idx] = (uint32_t)ptr;
             DMARxDscrTab[idx].DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
             DMARxDscrTab[idx].DESC3 = 0x80000000 | 0x01000000; /* OWN + BUF1V */
             SCB_CleanDCache_by_Addr((uint32_t *)&DMARxDscrTab[idx], sizeof(ETH_DMADescTypeDef_Shadow));
@@ -681,7 +680,7 @@ static void ethernetif_rebuild_rx_descriptors(void)
     if (ptr != NULL) {
       /* Set the new buffer address */
       DMARxDscrTab[idx].DESC0 = (uint32_t)ptr;
-      DMARxDscrTab[idx].BackupAddr0 = (uint32_t)ptr;
+      DMARxDscrBackup[idx] = (uint32_t)ptr;
       
       /* Set buffer length */
       DMARxDscrTab[idx].DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
@@ -735,7 +734,7 @@ static void stm32h7_recycle_rx_descriptor(uint32_t idx)
     if (new_ptr) {
         /* Update Descriptor */
         d->DESC0 = (uint32_t)new_ptr;
-        d->BackupAddr0 = (uint32_t)new_ptr;
+        DMARxDscrBackup[idx] = (uint32_t)new_ptr;
         d->DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
         
         /* Ownership back to DMA + IOC + BUF1V */
@@ -757,6 +756,14 @@ static void stm32h7_recycle_rx_descriptor(uint32_t idx)
     } else {
         printf("CRITICAL: Failed to recycle RX descriptor %lu\n", (unsigned long)idx);
     }
+}
+
+/* Helper function to safely get pbuf from buffer address */
+static struct pbuf *stm32h7_get_pbuf_from_buff(uint8_t *buff)
+{
+    /* Calculate pbuf address: buff is at offsetof(RxBuff_t, buff) within RxBuff_t */
+    struct pbuf *p = (struct pbuf *)((uint8_t *)buff - offsetof(RxBuff_t, buff));
+    return p;
 }
 
 static struct pbuf * low_level_input(struct netif *netif)
@@ -797,35 +804,30 @@ static struct pbuf * low_level_input(struct netif *netif)
         
         if ((d->DESC3 & 0x80000000) == 0 && (d->DESC3 & 0x20000000) && (d->DESC3 & 0x10000000)) {
              /* CPU owned + First Desc + Last Desc (Single packet) */
-             /* Remove unused len variable to fix warning */
-             
-             /* Re-reading H7 Reference Manual for RDES3 Write-Back:
-              * Bit 31: OWN
-              * Bit 30: CTXT
-              * Bit 29: FD
-              * Bit 28: LD
-              * Bits 14:0: Packet Length (PL)
-              */
              uint32_t pkt_len = (d->DESC3 & 0x00007FFF);
              
-             printf("Manual Read: Idx=%lu, Addr=0x%08lx, Len=%lu\n", (unsigned long)idx, (unsigned long)d->BackupAddr0, (unsigned long)pkt_len);
+             printf("Manual Read: Idx=%lu, Addr=0x%08lx, Len=%lu\n", (unsigned long)idx, (unsigned long)DMARxDscrBackup[idx], (unsigned long)pkt_len);
              
              /* Get the pbuf from the back-up address */
-             if (d->BackupAddr0 != 0) {
-                 uint8_t *buff = (uint8_t *)d->BackupAddr0;
-                 struct pbuf *p_manual = (struct pbuf *)(buff - offsetof(RxBuff_t, buff));
+             if (DMARxDscrBackup[idx] != 0) {
+                 uint8_t *buff = (uint8_t *)DMARxDscrBackup[idx];
+                 struct pbuf *p_manual = stm32h7_get_pbuf_from_buff(buff);
+                 
+                 /* ETH_CODE: Use memcpy to safely initialize pbuf fields
+                  * This prevents potential unaligned access issues */
+                 memset(p_manual, 0, sizeof(struct pbuf));
                  p_manual->next = NULL;
                  p_manual->tot_len = pkt_len;
                  p_manual->len = pkt_len;
                  
-                 /* Invalidate Cache */
+                 /* Invalidate Cache for the received packet data */
                  SCB_InvalidateDCache_by_Addr((uint32_t *)buff, pkt_len);
                  
                  p = p_manual;
                  
                  /* ETH_CODE: REFILL STRATEGY (INLINED)
-                  * We must immediately refill the current descriptor (idx) with a new buffer 
-                  * so the DMA can use it again. 
+                  * We must immediately refill the current descriptor (idx) with a new buffer
+                  * so the DMA can use it again.
                   */
                  
                  /* Allocate new pbuf */
@@ -834,11 +836,11 @@ static struct pbuf * low_level_input(struct netif *netif)
                  
                  if (new_ptr) {
                      /* Update Descriptor */
-                     d->DESC0 = (uint32_t)new_ptr;
-                     d->BackupAddr0 = (uint32_t)new_ptr;
-                     d->DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
+                         d->DESC0 = (uint32_t)new_ptr;
+                         DMARxDscrBackup[idx] = (uint32_t)new_ptr;
+                         d->DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
                      
-                     /* Ownership back to DMA + IOC + BUF1V 
+                     /* Ownership back to DMA + IOC + BUF1V
                       * IOC (Bit 30) is REQUIRED for interrupts to fire on completion! */
                      d->DESC3 = 0x80000000 | 0x40000000 | 0x01000000;
                      
@@ -846,16 +848,16 @@ static struct pbuf * low_level_input(struct netif *netif)
                      SCB_CleanDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
                      __DSB();
                      
-                     printf("Refilled Manual Desc %lu: Addr=0x%08lx, DESC3=0x%08lx\n", 
+                     printf("Refilled Manual Desc %lu: Addr=0x%08lx, DESC3=0x%08lx\n",
                             (unsigned long)idx, (unsigned long)d->DESC0, (unsigned long)d->DESC3);
-                                          /* Update HAL counters */
-                      if (heth.RxDescList.RxBuildDescCnt < ETH_RX_DESC_CNT) {
-                          heth.RxDescList.RxBuildDescCnt++;
-                      }
-                      heth.RxDescList.RxBuildDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
-                      
-                      /* Kick DMA Tail Pointer just in case */
-                      stm32h7_eth_kick_rx_dma();
+                                           /* Update HAL counters */
+                     if (heth.RxDescList.RxBuildDescCnt < ETH_RX_DESC_CNT) {
+                         heth.RxDescList.RxBuildDescCnt++;
+                     }
+                     heth.RxDescList.RxBuildDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
+                     
+                     /* Kick DMA Tail Pointer just in case */
+                     stm32h7_eth_kick_rx_dma();
                  } else {
                      printf("CRITICAL: Failed to refill Manual Desc %lu\n", (unsigned long)idx);
                  }
@@ -865,12 +867,6 @@ static struct pbuf * low_level_input(struct netif *netif)
              }
         } else {
              printf("Manual Read: Desc not ready or weird state. DESC3=0x%08lx\n", (unsigned long)d->DESC3);
-             
-             /* ETH_CODE: Do NOT advance RxDescIdx here!
-              * If OWN=1 (DMA Owned), it means the buffer is empty and waiting for a packet.
-              * We must stay on this index and wait for the DMA to flip OWN=0.
-              * If we advance, we desynchronize from the DMA and miss the packet when it arrives! 
-              */
         }
     } else {
         /* ETH_CODE: After successfully reading data, rebuild RX descriptors
@@ -1311,10 +1307,9 @@ void ethernet_link_thread(void* argument)
           HAL_ETH_RxAllocateCallback(&ptr);
           if (ptr) {
             DMARxDscrTab[i].DESC0 = (uint32_t)ptr;
-            /* ETH_CODE: Store buffer address in BackupAddr0. 
-             * ALL STM32 HAL versions use this to retrieve the buffer address 
-             * independently of what the DMA writes back to DESC0. */
-            DMARxDscrTab[i].BackupAddr0 = (uint32_t)ptr;
+            /* ETH_CODE: Store buffer address in separate backup array.
+             * DMA overwrites DESC0 on completion, so we need separate storage. */
+            DMARxDscrBackup[i] = (uint32_t)ptr;
 
             /* DESC2 bitfields for H7:
              * [13:0]: Buffer 1 Length
@@ -1335,8 +1330,8 @@ void ethernet_link_thread(void* argument)
             __DSB();
             
             printf("RX Init Desc %lu: addr=0x%08lx, bkup=0x%08lx, len=%lu, DESC3=0x%08lx\n",
-                   (unsigned long)i, (unsigned long)DMARxDscrTab[i].DESC0, 
-                   (unsigned long)DMARxDscrTab[i].BackupAddr0,
+                   (unsigned long)i, (unsigned long)DMARxDscrTab[i].DESC0,
+                   (unsigned long)DMARxDscrBackup[i],
                    (unsigned long)DMARxDscrTab[i].DESC2, (unsigned long)DMARxDscrTab[i].DESC3);
             
             /* ETH_CODE: Update HAL internal tracking to match the new packet buffer availability */
