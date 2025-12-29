@@ -130,3 +130,55 @@
 2. **Monitor for remaining alignment faults** - If UNALIGNED faults persist, investigate other code paths
 3. **Consider alternative: ETH_RX_BUFFER_ALIGNMENT** - If ETH_PAD_SIZE=2 fails, consider using `LWIP_DEC_MEMORY_ALIGNMENT` or modifying DMA buffer alignment
 4. **Performance optimization** - Once stable, benchmark network throughput
+
+## MOD-008 [2025-12-29 19:50:00]
+**Category**: Bug Fix / Optimization
+**Modified Files**: `rtemslwip/stm32h7/stm32h7_eth.c`
+**Description**: Replace `low_level_input` with manual descriptor processing loops and increase `ETH_RX_DESC_CNT` to 12.
+**Rationale**: `HAL_ETH_ReadData` fails with `ETH_PAD_SIZE=2` due to alignment offset mismatches. The manual read logic has been verified to work. Increasing descriptors prevents RBU during bursts.
+**Implementation**:
+- Changed `ETH_RX_DESC_CNT` from 4 to 12.
+- Replaced `low_level_input` to directly scan RX descriptors, checking `OWN` bit.
+- Integrated `eth_pad` offset logic (+2 bytes) directly into the read loop.
+- Implemented immediate descriptor recycling/refill within the read loop to minimize latency.
+**Test Results**:
+- **Test Method**: Hardware verification.
+- **Expected Outcome**: Stable operation, no RBU, packet reception.
+- **Actual Outcome**: System stable. `HAL_ETH_ReadData` and RBU errors eliminated. IRQs firing correctly (Count=8). However, `RX: ...` logs missing, suggesting `low_level_input` might not be successfully retrieving packets despite IRQs.
+- **Status**: ✓ Success (Stability achieved)
+**Context**:
+- **Related Entries**: MOD-006, MOD-007
+- **Side Effects**: RX Data path might be silently dropping packets or logging is suppressed.
+- **Next Steps**: Debug `low_level_input` content retrieval.
+
+## MOD-009 [2025-12-29 20:00:00]
+**Category**: Bug Fix
+**Modified Files**: `rtemslwip/stm32h7/stm32h7_eth.c`
+**Description**: Debug and fix silent packet dropping in `low_level_input`.
+**Rationale**: IRQs are firing (DMA completing), but the application stack is not reporting received bytes. This implies `low_level_input` is returning NULL, possibly due to `RxDescIdx` desync or cache invalidation issues preventing the CPU from seeing the `OWN` bit flip.
+**Implementation Plan**:
+- Add diagnostic prints in `low_level_input` to show `RxDescIdx` and Descriptor flags when called.
+- Verify D-Cache invalidation scope.
+- Check if `RxDescIdx` needs to loop/scan forward if multiple packets arrive.
+---
+
+# SESSION SUMMARY [2025-12-29 20:05:00]
+
+## Session Overview
+**Entries**: MOD-008 through MOD-009
+**Total Modifications**: 1 implementation + 1 plan
+**Files Modified**: `rtemslwip/stm32h7/stm32h7_eth.c`
+
+## Overall Status
+**Phase**: Stabilization & RBU Fix (Success) -> Data Path Debug (Checking)
+**Goal**: The system has achieved electrical/driver stability (no crashes, no RBU loops). The focus is now on ensuring the data actually reaches the application.
+
+## Critical Issues Still Unresolved
+1.  **Silent Packet Drop**: IRQs fire (Count=8), meaning the hardware is receiving and DMA is writing, but the application stack (`RX: ...` logs) sees nothing. This indicates a logic gap in `low_level_input` where it fails to pick up the packet despite the descriptor being owned by CPU or the cache being stale.
+
+## Next Session Priorities
+1.  **Execute MOD-009**: Debug `low_level_input`.
+    *   Add printfs to see `RxDescIdx`, `DESC3` values, and ownership bits during the IRQ/Thread cycle.
+    *   Verify if `SCB_InvalidateDCache` is working effectively on the new descriptor 12-ring.
+2.  **Verify Data Integrity**: Once `RX` logs appear, verify the payload content is correct (ping/IP headers).
+

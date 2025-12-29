@@ -104,7 +104,7 @@ typedef struct __attribute__((aligned(32)))
 } RxBuff_t;
 
 /* Memory Pool Manual Declaration (points to D2 SRAM) */
-#define ETH_RX_DESC_CNT               4U
+#define ETH_RX_DESC_CNT               12U
 #define ETH_TX_DESC_CNT               4U
 #define ETH_RX_BUFFER_CNT             32U
 #define RX_POOL_BASE_ADDR             0x30000600
@@ -770,127 +770,104 @@ static struct pbuf * low_level_input(struct netif *netif)
 {
   struct pbuf *p = NULL;
 
-  static uint32_t ccr_check_cnt = 0;
-  if (ccr_check_cnt++ % 100 == 0) {
-    printf("low_level_input: CCR=0x%08lx\n", (unsigned long)SCB->CCR);
-  }
-  printf("low_level_input: RxAllocStatus=%d\n", RxAllocStatus);
-  if(RxAllocStatus == RX_ALLOC_OK)
-  {
-    HAL_StatusTypeDef status = HAL_ETH_ReadData(&heth, (void **)&p);
-    printf("low_level_input: HAL_ETH_ReadData status=%d, got pbuf 0x%p\n", (int)status, p);
-    
-    if (status != HAL_OK || p == NULL) {
-        /* Extra diagnostic on failure */
-        printf("low_level_input: HAL_ETH_ReadData FAILED (stat=%d)! Trying manual read...\n", (int)status);
-        
-        /* ETH_CODE: Manual Packet Read Fallback
-         * Check if the current descriptor is owned by CPU (Bit 31 = 0) */
-        uint32_t idx = heth.RxDescList.RxDescIdx;
-        ETH_DMADescTypeDef_Shadow *d = &DMARxDscrTab[idx];
-        
-        /* ETH_CODE: Invalidate Cache BEFORE reading the descriptor!
-         * The thread might be seeing stale cache (0s) while DMA updated RAM. */
-        SCB_InvalidateDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
-        
-        printf("Manual Check: Idx=%lu, Addr=0x%08lx, DESC0=0x%08lx, DESC3=0x%08lx\n",
-               (unsigned long)idx, (unsigned long)d, (unsigned long)d->DESC0, (unsigned long)d->DESC3);
-        
-        /* ETH_CODE: Handle Context Descriptors (CTXT=1)
-         * Context descriptors contain metadata (timestamps, etc.) and don't have packet data.
-         * They must be recycled and skipped, not treated as packet descriptors. */
-        if ((d->DESC3 & 0x80000000) == 0 && (d->DESC3 & 0x40000000)) {
-            printf("Manual Read: Context descriptor detected (CTXT=1), recycling and skipping...\n");
-            /* Recycle this context descriptor and return NULL (no packet) */
-            stm32h7_recycle_rx_descriptor(idx);
-            return NULL;
-        }
-        
-        if ((d->DESC3 & 0x80000000) == 0 && (d->DESC3 & 0x20000000) && (d->DESC3 & 0x10000000)) {
-             /* CPU owned + First Desc + Last Desc (Single packet) */
-             uint32_t pkt_len = (d->DESC3 & 0x00007FFF);
-             
-             printf("Manual Read: Idx=%lu, Addr=0x%08lx, Len=%lu\n", (unsigned long)idx, (unsigned long)DMARxDscrBackup[idx], (unsigned long)pkt_len);
-             
-             /* Get the pbuf from the back-up address */
-             if (DMARxDscrBackup[idx] != 0) {
-                 /* DMARxDscrBackup[idx] includes +2 offset from ETH_PAD_SIZE */
-                 uint8_t *buff_with_offset = (uint8_t *)DMARxDscrBackup[idx];
-                 
-                 /* ETH_CODE: Calculate actual buffer start (without +2 offset).
-                  * pbuf_alloced_custom expects the true buffer start, and will set
-                  * p->payload based on that. We then manually adjust payload to point
-                  * to the offset region where DMA wrote the data. */
-                 uint8_t *actual_buff = buff_with_offset - 2;
-                 struct pbuf *p_manual = stm32h7_get_pbuf_from_buff(actual_buff);
-                 struct pbuf_custom *p_custom = (struct pbuf_custom *)p_manual;
-                 
-                 /* ETH_CODE: Use pbuf_alloced_custom with actual buffer start. */
-                 p_custom->custom_free_function = pbuf_free_custom;
-                 p = pbuf_alloced_custom(PBUF_RAW, pkt_len, PBUF_REF, p_custom, actual_buff, ETH_RX_BUFFER_SIZE);
-                 
-                 /* ETH_CODE: Manually adjust payload to point to the offset region
-                  * where the Ethernet header actually resides (after ETH_PAD_SIZE bytes). */
-                 if (p != NULL) {
-                     p->payload = (uint8_t *)p->payload + 2;
-                 }
-                 
-                 if (p == NULL) {
-                     printf("CRITICAL: pbuf_alloced_custom failed for manual read!\n");
-                     return NULL;
-                 }
-                 
-                 /* Invalidate Cache for the received packet data */
-                 SCB_InvalidateDCache_by_Addr((uint32_t *)actual_buff, pkt_len);
-                 
-                 /* ETH_CODE: REFILL STRATEGY (INLINED)
-                  * We must immediately refill the current descriptor (idx) with a new buffer
-                  * so the DMA can use it again.
-                  */
-                 
-                 /* Allocate new pbuf */
-                 uint8_t *new_ptr = NULL;
-                 HAL_ETH_RxAllocateCallback(&new_ptr);
-                 
-                 if (new_ptr) {
-                     /* Update Descriptor */
-                         d->DESC0 = (uint32_t)new_ptr;
-                         DMARxDscrBackup[idx] = (uint32_t)new_ptr;
-                         d->DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
-                     
-                     /* Ownership back to DMA + IOC + BUF1V
-                      * IOC (Bit 30) is REQUIRED for interrupts to fire on completion! */
-                     d->DESC3 = 0x80000000 | 0x40000000 | 0x01000000;
-                     
-                     /* Flush Cache */
-                     SCB_CleanDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
-                     __DSB();
-                     
-                     printf("Refilled Manual Desc %lu: Addr=0x%08lx, DESC3=0x%08lx\n",
-                            (unsigned long)idx, (unsigned long)d->DESC0, (unsigned long)d->DESC3);
-                                           /* Update HAL counters */
-                     if (heth.RxDescList.RxBuildDescCnt < ETH_RX_DESC_CNT) {
-                         heth.RxDescList.RxBuildDescCnt++;
-                     }
-                     heth.RxDescList.RxBuildDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
-                     
-                     /* Kick DMA Tail Pointer just in case */
-                     stm32h7_eth_kick_rx_dma();
-                 } else {
-                     printf("CRITICAL: Failed to refill Manual Desc %lu\n", (unsigned long)idx);
-                 }
+  /* ETH_CODE: Manual Packet Read Strategy
+   * We iterate through descriptors starting from RxDescIdx (Read Pointer).
+   * If a descriptor is owned by CPU (OWN=0), we process it.
+   */
+  uint32_t idx = heth.RxDescList.RxDescIdx;
+  ETH_DMADescTypeDef_Shadow *d = &DMARxDscrTab[idx];
 
-                 /* Update HAL Read Index */
-                 heth.RxDescList.RxDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
-             }
-        } else {
-             printf("Manual Read: Desc not ready or weird state. DESC3=0x%08lx\n", (unsigned long)d->DESC3);
-        }
-    } else {
-        /* ETH_CODE: After successfully reading data, rebuild RX descriptors
-         * to return them to the DMA. This prevents "Receive Buffer Unavailable" errors. */
-        ethernetif_rebuild_rx_descriptors();
-    }
+  /* ETH_CODE: Invalidate Cache BEFORE reading the descriptor!
+   * The thread might be seeing stale cache (0s) while DMA updated RAM. */
+  SCB_InvalidateDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
+
+  /* Check if the descriptor is owned by CPU (Bit 31 = 0) */
+  if ((d->DESC3 & 0x80000000) == 0) {
+      
+      /* Handle Context Descriptors (CTXT=1, Bit 30)
+       * Context descriptors contain metadata (timestamps, etc.) and don't have packet data.
+       * They must be recycled and skipped, not treated as packet descriptors. */
+      if ((d->DESC3 & 0x40000000) != 0) {
+          /* Recycle this context descriptor */
+          stm32h7_recycle_rx_descriptor(idx);
+          /* Return NULL to indicate no packet payload yet, caller will loop */
+          return NULL;
+      }
+      
+      /* CPU owned + Normal Descriptor */
+      if ((d->DESC3 & 0x20000000) && (d->DESC3 & 0x10000000)) {
+           /* First Desc (FD) + Last Desc (LD) set -> Single packet */
+           uint32_t pkt_len = (d->DESC3 & 0x00007FFF);
+           
+           /* Get the pbuf from the back-up address */
+           if (DMARxDscrBackup[idx] != 0) {
+               /* DMARxDscrBackup[idx] includes +2 offset from ETH_PAD_SIZE */
+               uint8_t *buff_with_offset = (uint8_t *)DMARxDscrBackup[idx];
+               
+               /* ETH_CODE: Calculate actual buffer start (without +2 offset). */
+               uint8_t *actual_buff = buff_with_offset - 2;
+               struct pbuf *p_manual = stm32h7_get_pbuf_from_buff(actual_buff);
+               struct pbuf_custom *p_custom = (struct pbuf_custom *)p_manual;
+               
+               /* ETH_CODE: Use pbuf_alloced_custom with actual buffer start. */
+               p_custom->custom_free_function = pbuf_free_custom;
+               p = pbuf_alloced_custom(PBUF_RAW, pkt_len, PBUF_REF, p_custom, actual_buff, ETH_RX_BUFFER_SIZE);
+               
+               /* ETH_CODE: Manually adjust payload to point to the offset region
+                * where the Ethernet header actually resides (after ETH_PAD_SIZE bytes). */
+               if (p != NULL) {
+                   p->payload = (uint8_t *)p->payload + 2;
+                   
+                   /* Invalidate Cache for the received packet data */
+                   SCB_InvalidateDCache_by_Addr((uint32_t *)actual_buff, pkt_len);
+               } else {
+                   printf("CRITICAL: pbuf_alloced_custom failed! Dropping packet.\n");
+               }
+               
+               /* ETH_CODE: IMMEDIATE REFILL STRATEGY
+                * We must immediately refill the current descriptor (idx) with a new buffer
+                * so the DMA can use it again. This prevents RBU.
+                */
+               
+               /* Allocate new pbuf */
+               uint8_t *new_ptr = NULL;
+               HAL_ETH_RxAllocateCallback(&new_ptr);
+               
+               if (new_ptr) {
+                   /* Update Descriptor */
+                   d->DESC0 = (uint32_t)new_ptr;
+                   DMARxDscrBackup[idx] = (uint32_t)new_ptr;
+                   d->DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
+                   
+                   /* Ownership back to DMA + IOC + BUF1V
+                    * IOC (Bit 30) is REQUIRED for interrupts to fire on completion! */
+                   d->DESC3 = 0x80000000 | 0x40000000 | 0x01000000;
+                   
+                   /* Flush Cache */
+                   SCB_CleanDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
+                   __DSB();
+                   
+                   /* Update HAL counters */
+                   if (heth.RxDescList.RxBuildDescCnt < ETH_RX_DESC_CNT) {
+                       heth.RxDescList.RxBuildDescCnt++;
+                   }
+                   heth.RxDescList.RxBuildDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
+                   
+                   /* Kick DMA Tail Pointer */
+                   stm32h7_eth_kick_rx_dma();
+               } else {
+                   printf("CRITICAL: Failed to refill Rx Desc %lu\n", (unsigned long)idx);
+               }
+
+               /* Update HAL Read Index to next descriptor */
+               heth.RxDescList.RxDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
+           }
+      } else {
+           /* Multi-fragment packet or strange state.
+            * For now, just recycle it to keep queue moving. */
+           printf("Manual Read: Fragmented/Strange packet (DESC3=0x%08lx). Recycling.\n", (unsigned long)d->DESC3);
+           stm32h7_recycle_rx_descriptor(idx);
+      }
   }
 
   return p;
