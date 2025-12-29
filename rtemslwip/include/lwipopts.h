@@ -247,6 +247,10 @@
 #ifndef TCP_MSS
 #define TCP_MSS 1576
 #endif
+ 
+ #ifndef ETH_PAD_SIZE
+ #define ETH_PAD_SIZE 2
+ #endif
 
 #ifndef TCP_OVERSIZE
 #define TCP_OVERSIZE TCP_MSS

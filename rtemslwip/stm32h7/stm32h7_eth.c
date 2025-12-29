@@ -770,6 +770,10 @@ static struct pbuf * low_level_input(struct netif *netif)
 {
   struct pbuf *p = NULL;
 
+  static uint32_t ccr_check_cnt = 0;
+  if (ccr_check_cnt++ % 100 == 0) {
+    printf("low_level_input: CCR=0x%08lx\n", (unsigned long)SCB->CCR);
+  }
   printf("low_level_input: RxAllocStatus=%d\n", RxAllocStatus);
   if(RxAllocStatus == RX_ALLOC_OK)
   {
@@ -812,18 +816,20 @@ static struct pbuf * low_level_input(struct netif *netif)
              if (DMARxDscrBackup[idx] != 0) {
                  uint8_t *buff = (uint8_t *)DMARxDscrBackup[idx];
                  struct pbuf *p_manual = stm32h7_get_pbuf_from_buff(buff);
+                 struct pbuf_custom *p_custom = (struct pbuf_custom *)p_manual;
                  
-                 /* ETH_CODE: Use memcpy to safely initialize pbuf fields
-                  * This prevents potential unaligned access issues */
-                 memset(p_manual, 0, sizeof(struct pbuf));
-                 p_manual->next = NULL;
-                 p_manual->tot_len = pkt_len;
-                 p_manual->len = pkt_len;
+                 /* ETH_CODE: Use pbuf_alloced_custom to correctly initialize all fields,
+                  * including payload, tot_len, and PBUF_FLAG_IS_CUSTOM. */
+                 p_custom->custom_free_function = pbuf_free_custom;
+                 p = pbuf_alloced_custom(PBUF_RAW, pkt_len, PBUF_REF, p_custom, buff, ETH_RX_BUFFER_SIZE);
+                 
+                 if (p == NULL) {
+                     printf("CRITICAL: pbuf_alloced_custom failed for manual read!\n");
+                     return NULL;
+                 }
                  
                  /* Invalidate Cache for the received packet data */
                  SCB_InvalidateDCache_by_Addr((uint32_t *)buff, pkt_len);
-                 
-                 p = p_manual;
                  
                  /* ETH_CODE: REFILL STRATEGY (INLINED)
                   * We must immediately refill the current descriptor (idx) with a new buffer
@@ -1509,7 +1515,13 @@ static void MPU_Config(void)
 
   /* Disables the MPU */
   HAL_MPU_Disable();
-
+ 
+  printf("MPU_Config: CCR before = 0x%08lx\n", (unsigned long)SCB->CCR);
+  SCB->CCR &= ~SCB_CCR_UNALIGN_TRP_Msk;
+  __DSB();
+  __ISB();
+  printf("MPU_Config: CCR after  = 0x%08lx\n", (unsigned long)SCB->CCR);
+ 
   /** Initializes and configures the Region and the memory to be protected
   */
   MPU_InitStruct.Enable = MPU_REGION_ENABLE;

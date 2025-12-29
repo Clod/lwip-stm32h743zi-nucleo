@@ -122,8 +122,37 @@ typedef u32_t               mem_ptr_t;
     #define PACK_STRUCT_END
     #define PACK_STRUCT_FIELD(x) x
 #endif
-
-/*
+ 
+ /** MEMCPY-like copying of IP addresses where addresses are known to be
+  * 16-bit-aligned if the port is correctly configured (so a port could define
+  * this to copying 2 u16_t's) - no NULL-pointer-checking needed. */
+ #define IPADDR_WORDALIGNED_COPY_TO_IP4_ADDR_T(dest, src) \
+   do { \
+     ((u8_t *)(dest))[0] = ((const u8_t *)(src))[0]; \
+     ((u8_t *)(dest))[1] = ((const u8_t *)(src))[1]; \
+     ((u8_t *)(dest))[2] = ((const u8_t *)(src))[2]; \
+     ((u8_t *)(dest))[3] = ((const u8_t *)(src))[3]; \
+   } while(0)
+ 
+ #define IPADDR_WORDALIGNED_COPY_FROM_IP4_ADDR_T(dest, src) \
+   IPADDR_WORDALIGNED_COPY_TO_IP4_ADDR_T(dest, src)
+ 
+ #define ip4_addr_copy(dest, src) \
+   do { \
+     ((u8_t *)(&((dest).addr)))[0] = ((const u8_t *)(&((src).addr)))[0]; \
+     ((u8_t *)(&((dest).addr)))[1] = ((const u8_t *)(&((src).addr)))[1]; \
+     ((u8_t *)(&((dest).addr)))[2] = ((const u8_t *)(&((src).addr)))[2]; \
+     ((u8_t *)(&((dest).addr)))[3] = ((const u8_t *)(&((src).addr)))[3]; \
+   } while(0)
+ 
+ #define ip_addr_copy_from_ip4(dest, src) \
+   do { \
+     ip4_addr_copy(*ip_2_ip4(&(dest)), src); \
+     IP_SET_TYPE_VAL(dest, IPADDR_TYPE_V4); \
+     ip_clear_no4(&dest); \
+   } while(0)
+ 
+ /*
  *     1 - load byte by byte, construct 16 bits word and add: not efficient for most platforms
  *     2 - load first byte if odd address, loop processing 16 bits words, add last byte.
  *     3 - load first byte and word if not 4 byte aligned, loop processing 32 bits words, add last word/byte.

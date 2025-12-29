@@ -30,7 +30,7 @@ static rtems_task Init(rtems_task_argument argument)
 {
   ip4_addr_t ipaddr, netmask, gw;
 
-  printf("\n\n*** STM32H7 LWIP TEST ***\n");
+  printf("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n*** STM32H7 LWIP TEST ***\n");
 
   tcpip_init(NULL, NULL);
 
