@@ -814,14 +814,26 @@ static struct pbuf * low_level_input(struct netif *netif)
              
              /* Get the pbuf from the back-up address */
              if (DMARxDscrBackup[idx] != 0) {
-                 uint8_t *buff = (uint8_t *)DMARxDscrBackup[idx];
-                 struct pbuf *p_manual = stm32h7_get_pbuf_from_buff(buff);
+                 /* DMARxDscrBackup[idx] includes +2 offset from ETH_PAD_SIZE */
+                 uint8_t *buff_with_offset = (uint8_t *)DMARxDscrBackup[idx];
+                 
+                 /* ETH_CODE: Calculate actual buffer start (without +2 offset).
+                  * pbuf_alloced_custom expects the true buffer start, and will set
+                  * p->payload based on that. We then manually adjust payload to point
+                  * to the offset region where DMA wrote the data. */
+                 uint8_t *actual_buff = buff_with_offset - 2;
+                 struct pbuf *p_manual = stm32h7_get_pbuf_from_buff(actual_buff);
                  struct pbuf_custom *p_custom = (struct pbuf_custom *)p_manual;
                  
-                 /* ETH_CODE: Use pbuf_alloced_custom to correctly initialize all fields,
-                  * including payload, tot_len, and PBUF_FLAG_IS_CUSTOM. */
+                 /* ETH_CODE: Use pbuf_alloced_custom with actual buffer start. */
                  p_custom->custom_free_function = pbuf_free_custom;
-                 p = pbuf_alloced_custom(PBUF_RAW, pkt_len, PBUF_REF, p_custom, buff, ETH_RX_BUFFER_SIZE);
+                 p = pbuf_alloced_custom(PBUF_RAW, pkt_len, PBUF_REF, p_custom, actual_buff, ETH_RX_BUFFER_SIZE);
+                 
+                 /* ETH_CODE: Manually adjust payload to point to the offset region
+                  * where the Ethernet header actually resides (after ETH_PAD_SIZE bytes). */
+                 if (p != NULL) {
+                     p->payload = (uint8_t *)p->payload + 2;
+                 }
                  
                  if (p == NULL) {
                      printf("CRITICAL: pbuf_alloced_custom failed for manual read!\n");
@@ -829,7 +841,7 @@ static struct pbuf * low_level_input(struct netif *netif)
                  }
                  
                  /* Invalidate Cache for the received packet data */
-                 SCB_InvalidateDCache_by_Addr((uint32_t *)buff, pkt_len);
+                 SCB_InvalidateDCache_by_Addr((uint32_t *)actual_buff, pkt_len);
                  
                  /* ETH_CODE: REFILL STRATEGY (INLINED)
                   * We must immediately refill the current descriptor (idx) with a new buffer
@@ -1305,13 +1317,14 @@ void ethernet_link_thread(void* argument)
         HAL_ETH_SetMACConfig(&heth, &MACConf);
         
         /* ETH_CODE: Manually populate and set BUF1V/OWN bits in RX descriptors
-         * BEFORE starting the DMA. This ensures the hardware sees "Ready" 
+         * BEFORE starting the DMA. This ensures the hardware sees "Ready"
          * descriptors immediately upon activation. */
         printf("ETH: Manually initializing RX descriptors...\n");
         for (uint32_t i = 0; i < ETH_RX_DESC_CNT; i++) {
           uint8_t *ptr = NULL;
           HAL_ETH_RxAllocateCallback(&ptr);
           if (ptr) {
+            /* ptr already includes +2 offset from HAL_ETH_RxAllocateCallback */
             DMARxDscrTab[i].DESC0 = (uint32_t)ptr;
             /* ETH_CODE: Store buffer address in separate backup array.
              * DMA overwrites DESC0 on completion, so we need separate storage. */
@@ -1425,12 +1438,16 @@ void HAL_ETH_RxAllocateCallback(uint8_t **buff)
   if (p)
   {
     /* Get the buff from the struct pbuf address. */
-    *buff = (uint8_t *)p + offsetof(RxBuff_t, buff);
+    /* ETH_CODE: With ETH_PAD_SIZE=2, DMA receives data at buff[2] so that IP header
+     * is 4-byte aligned. The pbuf points to the actual buffer, but we report
+     * buff+2 to the HAL so that DMA writes start at the correct offset. */
+    *buff = (uint8_t *)p + offsetof(RxBuff_t, buff) + 2;
     p->custom_free_function = pbuf_free_custom;
     /* Initialize the struct pbuf.
     * This must be performed whenever a buffer's allocated because it may be
     * changed by lwIP or the app, e.g., pbuf_free decrements ref. */
-    pbuf_alloced_custom(PBUF_RAW, 0, PBUF_REF, p, *buff, ETH_RX_BUFFER_SIZE);
+    /* ETH_CODE: Pass actual buffer start (without +2) so pbuf knows the true memory location */
+    pbuf_alloced_custom(PBUF_RAW, 0, PBUF_REF, p, (uint8_t *)p + offsetof(RxBuff_t, buff), ETH_RX_BUFFER_SIZE);
   }
   else
   {
@@ -1448,8 +1465,12 @@ void HAL_ETH_RxLinkCallback(void **pStart, void **pEnd, uint8_t *buff, uint16_t 
   struct pbuf **ppEnd = (struct pbuf **)pEnd;
   struct pbuf *p = NULL;
 
-  /* Get the struct pbuf from the buff address. */
-  p = (struct pbuf *)(buff - offsetof(RxBuff_t, buff));
+  /* ETH_CODE: buff points to buff+2 (due to ETH_PAD_SIZE=2 offset in HAL_ETH_RxAllocateCallback)
+   * Calculate actual buffer start and adjust pbuf accordingly. */
+  uint8_t *actual_buff = buff - 2;
+  
+  /* Get the struct pbuf from the actual buff address. */
+  p = (struct pbuf *)(actual_buff - offsetof(RxBuff_t, buff));
   p->next = NULL;
   p->tot_len = 0;
   p->len = Length;
@@ -1474,8 +1495,12 @@ void HAL_ETH_RxLinkCallback(void **pStart, void **pEnd, uint8_t *buff, uint16_t 
     p->tot_len += Length;
   }
 
-  /* Invalidate data cache because Rx DMA's writing to physical memory makes it stale. */
-  SCB_InvalidateDCache_by_Addr((uint32_t *)buff, Length);
+  /* ETH_CODE: Adjust pbuf payload to point to the offset region (buff+2)
+   * where the Ethernet header actually resides. */
+  p->payload = (uint8_t *)p->payload + 2;
+
+  /* ETH_CODE: Invalidate cache for the actual data region starting at actual_buff. */
+  SCB_InvalidateDCache_by_Addr((uint32_t *)actual_buff, Length);
 
 /* USER CODE END HAL ETH RxLinkCallback */
 }

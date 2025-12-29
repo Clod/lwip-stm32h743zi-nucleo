@@ -76,17 +76,57 @@
 - **Side Effects**: N/A
 - **Next Steps**: Implement `ETH_PAD_SIZE=2`.
 
-## MOD-006 [2025-12-29 19:15:00]
+## MOD-006 [2025-12-29 19:15:00] (completed 2025-12-29 19:22:00)
 **Category**: Performance / Stability
 **Modified Files**: `rtemslwip/include/lwipopts.h`, `rtemslwip/stm32h7/stm32h7_eth.c`
 **Description**: Implement `ETH_PAD_SIZE=2` for 4-byte aligned IP headers.
 **Rationale**: Disabling `CCR.UNALIGN_TRP` failed to prevent crashes in IPv4 processing. The most reliable solution is to pad the Ethernet header with 2 bytes so that the IP header (at offset 14) starts at offset 16 (aligned).
 **Implementation**:
-- Defined `ETH_PAD_SIZE 2` in `lwipopts.h`.
-- Offset RX buffer DMA address by 2 bytes in `stm32h7_eth.c`.
-- Adjusted `pbuf` initialization in `low_level_input` to account for padding.
+- Defined `ETH_PAD_SIZE 2` in `lwipopts.h` (lines 251-253).
+- Offset RX buffer DMA address by 2 bytes in `HAL_ETH_RxAllocateCallback` (line 1428): `*buff = (uint8_t *)p + offsetof(RxBuff_t, buff) + 2`.
+- Descriptor initialization in `ethernet_link_thread` (line 1315) automatically uses the offset pointer from `HAL_ETH_RxAllocateCallback`.
+- Adjusted `pbuf` initialization in `low_level_input` manual read fallback (lines 816-824) to use the offset buffer.
+- Updated `HAL_ETH_RxLinkCallback` (line 1478) cache invalidation to account for the 2-byte offset: `SCB_InvalidateDCache_by_Addr((uint32_t *)(buff - 2), Length)`.
 **Testing & Results**:
-- **Test Method**: Compilation and user verification.
+- **Test Method**: Build and user verification.
 - **Expected Outcome**: Stable IP communication without alignment faults.
-- **Actual Outcome**: ⏳ Pending
-- **Status**: ⏳ Pending
+- **Actual Outcome**: ⏳ Pending (requires hardware test)
+- **Status**: ✓ Implementation Complete
+
+## MOD-007 [2025-12-29 19:30:00] (completed 2025-12-29 19:31:00)
+**Category**: Bug Fix
+**Modified Files**: `rtemslwip/stm32h7/stm32h7_eth.c`
+**Description**: Fix pbuf payload calculation for ETH_PAD_SIZE=2 offset buffers.
+**Rationale**: When passing offset buffer (buff+2) to `pbuf_alloced_custom`, the internal payload calculation was incorrect, causing payload to point 2 bytes before the actual data.
+**Implementation**:
+- In `low_level_input` manual read fallback (lines 816-830): Calculate actual buffer start (buff-2), pass to `pbuf_alloced_custom`, then manually adjust payload: `p->payload = (uint8_t *)p->payload + 2`.
+- In `HAL_ETH_RxLinkCallback` (lines 1443-1481): Calculate actual buffer start, create pbuf from actual buffer, then adjust payload by +2.
+**Testing & Results**:
+- **Test Method**: Build and user verification.
+- **Expected Outcome**: Correct pbuf payload pointing to Ethernet header.
+- **Actual Outcome**: ⏳ Pending (requires hardware test)
+- **Status**: ✓ Implementation Complete
+
+---
+
+# SESSION SUMMARY [2025-12-29 19:32:00]
+
+## Session Overview
+**Entries**: MOD-006 through MOD-007
+**Total Modifications**: 2 entries
+**Files Modified**: `rtemslwip/include/lwipopts.h`, `rtemslwip/stm32h7/stm32h7_eth.c`
+
+## Overall Status
+**Phase**: ETH_PAD_SIZE=2 Implementation (In Progress)
+**Goal**: Achieve stable IPv4 packet processing without alignment faults on Cortex-M7
+
+## Critical Issues Still Unresolved
+1. **UNALIGNED Usage Fault** - Despite ETH_PAD_SIZE=2 implementation, unaligned access may still occur if any code path accesses IP header fields at unaligned addresses
+2. **HAL_ETH_ReadData Reliability** - The HAL function may return NULL or fail, requiring manual read fallback
+3. **Descriptor Management** - Complex interaction between HAL descriptor recycling and manual read path
+
+## Next Session Priorities
+1. **Test MOD-006/MOD-007 fixes** - Build and verify pbuf payload is correctly aligned
+2. **Monitor for remaining alignment faults** - If UNALIGNED faults persist, investigate other code paths
+3. **Consider alternative: ETH_RX_BUFFER_ALIGNMENT** - If ETH_PAD_SIZE=2 fails, consider using `LWIP_DEC_MEMORY_ALIGNMENT` or modifying DMA buffer alignment
+4. **Performance optimization** - Once stable, benchmark network throughput
