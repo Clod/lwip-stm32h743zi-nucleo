@@ -888,74 +888,52 @@ static struct pbuf * low_level_input(struct netif *netif)
 {
   struct pbuf *p = NULL;
 
-  // printf("\n========== LOW_LEVEL_INPUT START ==========\n");
-  // printf("LLI: Checking for packets...\n");
-
-  /* ETH_CODE: Manual Packet Read Strategy
-   * We iterate through descriptors starting from RxDescIdx (Read Pointer).
-   * If a descriptor is owned by CPU (OWN=0), we process it.
+  /* ETH_CODE: Loop to skip non-packet descriptors (Context/Strange)
+   * and find the next valid packet. Returning NULL prematurely causes
+   * the input thread to sleep even if valid packets follow.
    */
-  uint32_t idx = heth.RxDescList.RxDescIdx;
-  ETH_DMADescTypeDef_Shadow *d = &DMARxDscrTab[idx];
+  while (1) {
+      uint32_t idx = heth.RxDescList.RxDescIdx;
+      ETH_DMADescTypeDef_Shadow *d = &DMARxDscrTab[idx];
 
-  // printf("LLI: RxDescIdx=%lu, RxBuildDescIdx=%lu, RxBuildDescCnt=%lu\n",
-  //        (unsigned long)heth.RxDescList.RxDescIdx,
-  //        (unsigned long)heth.RxDescList.RxBuildDescIdx,
-  //        (unsigned long)heth.RxDescList.RxBuildDescCnt);
+      /* ETH_CODE: Invalidate Cache BEFORE reading the descriptor! */
+      SCB_InvalidateDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
 
-  /* ETH_CODE: Invalidate Cache BEFORE reading the descriptor!
-   * The thread might be seeing stale cache (0s) while DMA updated RAM. */
-  SCB_InvalidateDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
-
-  // printf("LLI: Desc[%lu] DESC0=0x%08lx, DESC1=0x%08lx, DESC2=0x%08lx, DESC3=0x%08lx\n",
-  //        (unsigned long)idx, (unsigned long)d->DESC0, (unsigned long)d->DESC1,
-  //        (unsigned long)d->DESC2, (unsigned long)d->DESC3);
-
-  /* Check if the descriptor is owned by CPU (Bit 31 = 0) */
-  if ((d->DESC3 & 0x80000000) == 0) {
-      // printf("LLI: Descriptor %lu is CPU-owned (OWN=0)\n", (unsigned long)idx);
-      
-      /* Handle Context Descriptors (CTXT=1, Bit 30)
-       * Context descriptors contain metadata (timestamps, etc.) and don't have packet data.
-       * They must be recycled and skipped, not treated as packet descriptors. */
-      if ((d->DESC3 & 0x40000000) != 0) {
-          printf("LLI: Context Descriptor detected (CTXT=1), recycling...\n");
-          /* Recycle this context descriptor */
-          stm32h7_recycle_rx_descriptor(idx);
-          /* Return NULL to indicate no packet payload yet, caller will loop */
-          // printf("========== LOW_LEVEL_INPUT END (Context Desc) ==========\n\n");
+      /* Check if the descriptor is owned by CPU (Bit 31 = 0) */
+      if ((d->DESC3 & 0x80000000) != 0) {
+          /* Descriptor is DMA-owned (OWN=1), no more packets available */
           return NULL;
       }
-      
+
+      /* Handle Context Descriptors (CTXT=1, Bit 30) */
+      if ((d->DESC3 & 0x40000000) != 0) {
+          printf("LLI: Context Descriptor detected (CTXT=1), recycling...\n");
+          stm32h7_recycle_rx_descriptor(idx);
+          /* Continue loop to check next descriptor immediately */
+          continue;
+      }
+
       /* CPU owned + Normal Descriptor */
       if ((d->DESC3 & 0x20000000) && (d->DESC3 & 0x10000000)) {
            /* First Desc (FD) + Last Desc (LD) set -> Single packet */
            uint32_t pkt_len = (d->DESC3 & 0x00007FFF);
            printf("LLI: Single packet detected, len=%lu bytes\n", (unsigned long)pkt_len);
-           
+
            /* Get the pbuf from the back-up address */
            if (DMARxDscrBackup[idx] != 0) {
-               /* DMARxDscrBackup[idx] includes +2 offset from ETH_PAD_SIZE */
                uint8_t *buff_with_offset = (uint8_t *)DMARxDscrBackup[idx];
-               
-               /* ETH_CODE: Calculate actual buffer start (without +2 offset). */
                uint8_t *actual_buff = buff_with_offset - 2;
                printf("LLI: Buffer address: backup=0x%08lx, actual=0x%08lx\n",
                       (unsigned long)DMARxDscrBackup[idx], (unsigned long)actual_buff);
-               
+
                struct pbuf *p_manual = stm32h7_get_pbuf_from_buff(actual_buff);
                struct pbuf_custom *p_custom = (struct pbuf_custom *)p_manual;
-               
-               /* ETH_CODE: Use pbuf_alloced_custom with actual buffer start. */
+
                p_custom->custom_free_function = pbuf_free_custom;
                p = pbuf_alloced_custom(PBUF_RAW, pkt_len, PBUF_REF, p_custom, actual_buff, ETH_RX_BUFFER_SIZE);
-               
-               /* ETH_CODE: Manually adjust payload to point to the offset region
-                * where the Ethernet header actually resides (after ETH_PAD_SIZE bytes). */
+
                if (p != NULL) {
                    p->payload = (uint8_t *)p->payload + 2;
-                   
-                   /* Invalidate Cache for the received packet data */
                    SCB_InvalidateDCache_by_Addr((uint32_t *)actual_buff, pkt_len);
                    printf("LLI: pbuf created successfully, p=0x%p, payload=0x%p\n", p, p->payload);
                    
@@ -968,7 +946,6 @@ static struct pbuf * low_level_input(struct netif *netif)
                    }
                    printf("\n");
 
-                   /* Dump first 14 bytes (Ethernet header) */
                    uint8_t *eth_hdr = (uint8_t *)p->payload;
                    printf("LLI: Ethernet Header: %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x, type=0x%02x%02x\n",
                           eth_hdr[0], eth_hdr[1], eth_hdr[2], eth_hdr[3], eth_hdr[4], eth_hdr[5],
@@ -977,33 +954,21 @@ static struct pbuf * low_level_input(struct netif *netif)
                } else {
                    printf("CRITICAL: pbuf_alloced_custom failed! Dropping packet.\n");
                }
-               
-               /* ETH_CODE: IMMEDIATE REFILL STRATEGY
-                * We must immediately refill the current descriptor (idx) with a new buffer
-                * so the DMA can use it again. This prevents RBU.
-                */
-               
-               /* Allocate new pbuf */
+
+               /* Refill descriptor */
                uint8_t *new_ptr = NULL;
                HAL_ETH_RxAllocateCallback(&new_ptr);
-               
+
                if (new_ptr) {
                    printf("LLI: Refilling descriptor %lu with new buffer 0x%08lx\n",
                           (unsigned long)idx, (unsigned long)new_ptr);
-                   /* Update Descriptor */
                    d->DESC0 = (uint32_t)new_ptr;
                    DMARxDscrBackup[idx] = (uint32_t)new_ptr;
                    d->DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
-                   
-                   /* Ownership back to DMA + IOC + BUF1V
-                    * IOC (Bit 30) is REQUIRED for interrupts to fire on completion! */
                    d->DESC3 = 0x80000000 | 0x40000000 | 0x01000000;
-                   
-                   /* Flush Cache */
                    SCB_CleanDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
                    __DSB();
-                   
-                   /* Update HAL counters */
+
                    if (heth.RxDescList.RxBuildDescCnt < ETH_RX_DESC_CNT) {
                        heth.RxDescList.RxBuildDescCnt++;
                    }
@@ -1014,7 +979,6 @@ static struct pbuf * low_level_input(struct netif *netif)
                           (unsigned long)heth.RxDescList.RxBuildDescIdx,
                           (unsigned long)heth.RxDescList.RxBuildDescCnt);
                    
-                   /* Kick DMA Tail Pointer */
                    stm32h7_eth_kick_rx_dma();
                } else {
                    printf("CRITICAL: Failed to refill Rx Desc %lu\n", (unsigned long)idx);
@@ -1022,18 +986,18 @@ static struct pbuf * low_level_input(struct netif *netif)
 
                /* Update HAL Read Index to next descriptor */
                heth.RxDescList.RxDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
+               
+               /* Return the packet we found */
+               return p;
            }
       } else {
-           /* Multi-fragment packet or strange state.
-            * For now, just recycle it to keep queue moving. */
+           /* Multi-fragment packet or strange state. Recycling. */
            printf("LLI: Fragmented/Strange packet (DESC3=0x%08lx). Recycling.\n", (unsigned long)d->DESC3);
            stm32h7_recycle_rx_descriptor(idx);
+           /* Continue loop to check next descriptor */
+           continue;
       }
-  } else {
-      // printf("LLI: Descriptor %lu is DMA-owned (OWN=1), no packet available\n", (unsigned long)idx);
   }
-
-  // printf("========== LOW_LEVEL_INPUT END ==========\n\n");
   return p;
 }
 
