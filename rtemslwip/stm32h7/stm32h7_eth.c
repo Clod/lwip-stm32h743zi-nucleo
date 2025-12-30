@@ -104,6 +104,9 @@ typedef struct __attribute__((aligned(32)))
 } RxBuff_t;
 
 /* Memory Pool Manual Declaration (points to D2 SRAM) */
+/* Undefine first to avoid redefinition warning from HAL header */
+#undef ETH_RX_DESC_CNT
+#undef ETH_TX_DESC_CNT
 #define ETH_RX_DESC_CNT               12U
 #define ETH_TX_DESC_CNT               4U
 #define ETH_RX_BUFFER_CNT             32U
@@ -140,7 +143,7 @@ typedef struct __attribute__((packed))
 
 /* Separate array to store backup buffer addresses (DMA overwrites DESC0 on completion) */
 static uint32_t DMARxDscrBackup[ETH_RX_DESC_CNT];
-static uint32_t DMATxDscrBackup[ETH_TX_DESC_CNT];
+static uint32_t DMATxDscrBackup[ETH_TX_DESC_CNT] __attribute__((unused));
 
 __IO uint32_t TxPkt = 0;
 __IO uint32_t RxPkt = 0;
@@ -187,6 +190,10 @@ static void stm32h7_recycle_rx_descriptor(uint32_t idx);
 /* Helper to kick the RX DMA tail pointer correctly for a ring */
 static void stm32h7_eth_kick_rx_dma(void)
 {
+    printf("\n========== KICK_RX_DMA ==========\n");
+    printf("KICK: Setting DMACRDTPR to 0x%08lx (last desc)\n",
+           (unsigned long)&DMARxDscrTab[ETH_RX_DESC_CNT - 1]);
+    
     /* ETH_CODE: FIX - The tail pointer must ALWAYS point to the LAST descriptor
      * in the ring. This tells DMA "descriptors 0 to N-1 are available for use".
      *
@@ -198,29 +205,67 @@ static void stm32h7_eth_kick_rx_dma(void)
     
     /* Write Poll Demand to force immediate re-fetch of descriptors */
     *(__IO uint32_t *)((uint32_t)heth.Instance + 0x104C) = 0;
+    
+    printf("KICK: Poll demand written, DMACRDTPR now 0x%08lx\n",
+           (unsigned long)heth.Instance->DMACRDTPR);
+    printf("KICK: RxDescIdx=%lu, RxBuildDescIdx=%lu, RxBuildDescCnt=%lu\n",
+           (unsigned long)heth.RxDescList.RxDescIdx,
+           (unsigned long)heth.RxDescList.RxBuildDescIdx,
+           (unsigned long)heth.RxDescList.RxBuildDescCnt);
+    printf("========== KICK_RX_DMA END ==========\n\n");
 }
 
 static void stm32h7_eth_interrupt_handler(void *arg)
 {
   EthIrqCount++;
+  printf("\n========== ETH IRQ START ==========\n");
   printf("ETH IRQ: EthIrqCount=%lu\n", (unsigned long)EthIrqCount);
   
-
+  /* Dump DMA status registers BEFORE handling */
+  printf("ETH IRQ: DMACSR=0x%08lx, DMACIER=0x%08lx\n",
+         (unsigned long)heth.Instance->DMACSR, (unsigned long)heth.Instance->DMACIER);
+  printf("ETH IRQ: MACISR=0x%08lx, MACIER=0x%08lx\n",
+         (unsigned long)heth.Instance->MACISR, (unsigned long)heth.Instance->MACIER);
+  
+  /* Dump descriptor indices */
+  printf("ETH IRQ: RxDescIdx=%lu, RxBuildDescIdx=%lu, RxBuildDescCnt=%lu\n",
+         (unsigned long)heth.RxDescList.RxDescIdx,
+         (unsigned long)heth.RxDescList.RxBuildDescIdx,
+         (unsigned long)heth.RxDescList.RxBuildDescCnt);
+  
+  /* Dump all RX descriptors */
+  printf("ETH IRQ: RX Descriptors state:\n");
+  for(int i=0; i<ETH_RX_DESC_CNT; i++) {
+    ETH_DMADescTypeDef_Shadow *d = &DMARxDscrTab[i];
+    printf("  Desc[%d]: DESC0=0x%08lx, DESC1=0x%08lx, DESC2=0x%08lx, DESC3=0x%08lx\n", i,
+           (unsigned long)d->DESC0, (unsigned long)d->DESC1,
+           (unsigned long)d->DESC2, (unsigned long)d->DESC3);
+  }
+  
+  /* Dump DMA tail pointer */
+  printf("ETH IRQ: DMACRDTPR=0x%08lx (should be 0x%08lx)\n",
+         (unsigned long)heth.Instance->DMACRDTPR,
+         (unsigned long)&DMARxDscrTab[ETH_RX_DESC_CNT - 1]);
   
   HAL_ETH_IRQHandler(&heth);
    
   /* ETH_CODE: After HAL processing, check if we need to kick the DMA again.
    * If descriptors were recycled by the error callback, kick DMA to resume. */
   uint32_t dmacsr = heth.Instance->DMACSR;
+  printf("ETH IRQ: After HAL - DMACSR=0x%08lx\n", (unsigned long)dmacsr);
+  
   if (dmacsr & ETH_DMACSR_RBU) {
       /* RBU bit is sticky. Clear it manually to allow the DMA to resume. */
+      printf("ETH IRQ: RBU detected! Clearing and resuming DMA...\n");
       heth.Instance->DMACSR = (ETH_DMACSR_RBU | ETH_DMACSR_AIS);
       stm32h7_eth_kick_rx_dma();
       printf("ETH IRQ: RBU Cleared & DMA Resumed\n");
   }
   
   /* Signal RX semaphore to process any received packets */
+  printf("ETH IRQ: Signaling RxPktSemaphore\n");
   sys_sem_signal(&RxPktSemaphore);
+  printf("========== ETH IRQ END ==========\n\n");
 }
 
 /**
@@ -231,8 +276,22 @@ static void stm32h7_eth_interrupt_handler(void *arg)
 void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *handlerEth)
 {
   RxIrqCount++;
+  printf("\n========== ETH RX COMPLETE CALLBACK ==========\n");
   printf("ETH RX Callback: RxIrqCount=%lu\n", (unsigned long)RxIrqCount);
+  printf("ETH RX Callback: RxDescIdx=%lu, RxBuildDescIdx=%lu, RxBuildDescCnt=%lu\n",
+         (unsigned long)handlerEth->RxDescList.RxDescIdx,
+         (unsigned long)handlerEth->RxDescList.RxBuildDescIdx,
+         (unsigned long)handlerEth->RxDescList.RxBuildDescCnt);
+  
+  /* Dump descriptor at current index */
+  uint32_t idx = handlerEth->RxDescList.RxDescIdx;
+  ETH_DMADescTypeDef_Shadow *d = &DMARxDscrTab[idx];
+  printf("ETH RX Callback: Desc[%lu] DESC0=0x%08lx, DESC1=0x%08lx, DESC2=0x%08lx, DESC3=0x%08lx\n",
+         (unsigned long)idx, (unsigned long)d->DESC0, (unsigned long)d->DESC1,
+         (unsigned long)d->DESC2, (unsigned long)d->DESC3);
+  
   sys_sem_signal(&RxPktSemaphore);
+  printf("========== ETH RX COMPLETE CALLBACK END ==========\n\n");
 }
 /**
   * @brief  Ethernet Tx Transfer completed callback
@@ -241,7 +300,11 @@ void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *handlerEth)
   */
 void HAL_ETH_TxCpltCallback(ETH_HandleTypeDef *handlerEth)
 {
+  printf("\n========== ETH TX COMPLETE CALLBACK ==========\n");
+  printf("ETH TX Callback: Tx complete\n");
+  printf("ETH TX Callback: CurTxDesc=%lu\n", (unsigned long)handlerEth->TxDescList.CurTxDesc);
   sys_sem_signal(&TxPktSemaphore);
+  printf("========== ETH TX COMPLETE CALLBACK END ==========\n\n");
 }
 /**
   * @brief  Ethernet DMA transfer error callback
@@ -251,13 +314,28 @@ void HAL_ETH_TxCpltCallback(ETH_HandleTypeDef *handlerEth)
 void HAL_ETH_ErrorCallback(ETH_HandleTypeDef *handlerEth)
 {
   uint32_t dma_err = HAL_ETH_GetDMAError(handlerEth);
+  printf("\n========== ETH ERROR CALLBACK ==========\n");
   printf("ETH Error Callback: DMA Error=0x%08lx\n", (unsigned long)dma_err);
+  
+  /* Decode error bits */
+  if (dma_err & ETH_DMACSR_RBU) printf("  - RBU: Receive Buffer Unavailable\n");
+  if (dma_err & ETH_DMACSR_RPS) printf("  - RPS: Receive Process Stopped\n");
+  if (dma_err & ETH_DMACSR_RWT) printf("  - RWT: Receive Watchdog Timeout\n");
+  if (dma_err & ETH_DMACSR_ETI) printf("  - ETI: Early Transmit Interrupt\n");
+  if (dma_err & ETH_DMACSR_FBE) printf("  - FBE: Fatal Bus Error\n");
+  if (dma_err & ETH_DMACSR_ERI) printf("  - ERI: Early Receive Interrupt\n");
+  if (dma_err & ETH_DMACSR_AIS) printf("  - AIS: Abnormal Interrupt Summary\n");
+  if (dma_err & ETH_DMACSR_NIS) printf("  - NIS: Normal Interrupt Summary\n");
   
   /* Diagnostic: Dump descriptor and HAL state on error */
   printf("ETH Error: RxIdx=%lu, RxBuildIdx=%lu, RxBuildCnt=%lu\n",
          (unsigned long)handlerEth->RxDescList.RxDescIdx,
          (unsigned long)handlerEth->RxDescList.RxBuildDescIdx,
          (unsigned long)handlerEth->RxDescList.RxBuildDescCnt);
+  
+  printf("ETH Error: DMACSR=0x%08lx, DMACRDTPR=0x%08lx\n",
+         (unsigned long)handlerEth->Instance->DMACSR,
+         (unsigned long)handlerEth->Instance->DMACRDTPR);
   
   for(int i=0; i<ETH_RX_DESC_CNT; i++) {
     ETH_DMADescTypeDef_Shadow *d = &DMARxDscrTab[i];
@@ -268,6 +346,7 @@ void HAL_ETH_ErrorCallback(ETH_HandleTypeDef *handlerEth)
            (unsigned long)d->DESC2,
            (unsigned long)d->DESC3);
   }
+  printf("========== ETH ERROR CALLBACK END ==========\n\n");
 
   if((dma_err & ETH_DMACSR_RBU) == ETH_DMACSR_RBU)
   {
@@ -357,8 +436,12 @@ static void low_level_init(struct netif *netif)
   MACAddr[5] = 0x00;
   heth.Init.MACAddr = &MACAddr[0];
  heth.Init.MediaInterface = HAL_ETH_RMII_MODE;
+ /* Suppress warning about packed structure pointer conversion */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Waddress-of-packed-member"
  heth.Init.TxDesc = (ETH_DMADescTypeDef *)DMATxDscrTab;
  heth.Init.RxDesc = (ETH_DMADescTypeDef *)DMARxDscrTab;
+#pragma GCC diagnostic pop
  heth.Init.RxBuffLen = 1536;
 
  /* USER CODE END MACADDRESS */
@@ -567,6 +650,9 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
   err_t errval = ERR_OK;
   ETH_BufferTypeDef Txbuffer[ETH_TX_DESC_CNT];
 
+  printf("\n========== TX START ==========\n");
+  printf("TX: low_level_output called, p=0x%p, tot_len=%u\n", p, (unsigned int)p->tot_len);
+  
   memset(Txbuffer, 0 , ETH_TX_DESC_CNT*sizeof(ETH_BufferTypeDef));
 
   for(q = p; q != NULL; q = q->next)
@@ -576,6 +662,7 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
 
     Txbuffer[i].buffer = q->payload;
     Txbuffer[i].len = q->len;
+    printf("TX: pbuf[%lu] payload=0x%p, len=%u\n", (unsigned long)i, q->payload, (unsigned int)q->len);
 
     if(i>0)
     {
@@ -601,16 +688,26 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
     SCB_CleanDCache_by_Addr((uint32_t *)q->payload, q->len);
   }
 
-  printf("TX: %u bytes\n", (unsigned int)p->tot_len);
+  printf("TX: Cache cleaned, calling HAL_ETH_Transmit_IT\n");
+  printf("TX: CurTxDesc=%lu before transmit\n", (unsigned long)heth.TxDescList.CurTxDesc);
+  
+  /* Dump TX descriptors before transmit */
+  for(int j=0; j<ETH_TX_DESC_CNT; j++) {
+    ETH_DMADescTypeDef_Shadow *d = &DMATxDscrTab[j];
+    printf("TX: Desc[%d] DESC0=0x%08lx, DESC1=0x%08lx, DESC2=0x%08lx, DESC3=0x%08lx\n", j,
+           (unsigned long)d->DESC0, (unsigned long)d->DESC1,
+           (unsigned long)d->DESC2, (unsigned long)d->DESC3);
+  }
 
   HAL_ETH_Transmit_IT(&heth, &TxConfig);
   
-  /* Log before wait */
-  // printf("TX: Waiting for semaphore...\n");
+  printf("TX: Waiting for TxPktSemaphore...\n");
   sys_arch_sem_wait(&TxPktSemaphore, TIME_WAITING_FOR_INPUT);
-  // printf("TX: Semaphore acquired.\n");
+  printf("TX: TxPktSemaphore acquired\n");
 
   HAL_ETH_ReleaseTxPacket(&heth);
+  printf("TX: Packet released\n");
+  printf("========== TX END ==========\n\n");
 
   return errval;
 }
@@ -627,7 +724,7 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
  * This is critical for preventing "Receive Buffer Unavailable" errors.
  * After HAL_ETH_ReadData processes a packet, the descriptor must be
  * returned to the DMA with a new buffer and OWN bit set. */
-static void ethernetif_rebuild_rx_descriptors(void)
+static void __attribute__((unused)) ethernetif_rebuild_rx_descriptors(void)
 {
   /* Use RxBuildDescIdx (Refill Pointer) to start searching for empty descriptors.
    * Using RxDescIdx (Read Pointer) is wrong because passing the read pointer
@@ -725,13 +822,23 @@ static void ethernetif_rebuild_rx_descriptors(void)
  */
 static void stm32h7_recycle_rx_descriptor(uint32_t idx)
 {
+    printf("\n========== RECYCLE RX DESC %lu ==========\n", (unsigned long)idx);
     ETH_DMADescTypeDef_Shadow *d = &DMARxDscrTab[idx];
+    
+    printf("RECYCLE: Before - DESC0=0x%08lx, DESC1=0x%08lx, DESC2=0x%08lx, DESC3=0x%08lx\n",
+           (unsigned long)d->DESC0, (unsigned long)d->DESC1,
+           (unsigned long)d->DESC2, (unsigned long)d->DESC3);
+    printf("RECYCLE: RxDescIdx=%lu, RxBuildDescIdx=%lu, RxBuildDescCnt=%lu\n",
+           (unsigned long)heth.RxDescList.RxDescIdx,
+           (unsigned long)heth.RxDescList.RxBuildDescIdx,
+           (unsigned long)heth.RxDescList.RxBuildDescCnt);
     
     /* Allocate new buffer for this descriptor */
     uint8_t *new_ptr = NULL;
     HAL_ETH_RxAllocateCallback(&new_ptr);
     
     if (new_ptr) {
+        printf("RECYCLE: Allocated new buffer at 0x%08lx\n", (unsigned long)new_ptr);
         /* Update Descriptor */
         d->DESC0 = (uint32_t)new_ptr;
         DMARxDscrBackup[idx] = (uint32_t)new_ptr;
@@ -739,6 +846,10 @@ static void stm32h7_recycle_rx_descriptor(uint32_t idx)
         
         /* Ownership back to DMA + IOC + BUF1V */
         d->DESC3 = 0x80000000 | 0x40000000 | 0x01000000;
+        
+        printf("RECYCLE: After - DESC0=0x%08lx, DESC1=0x%08lx, DESC2=0x%08lx, DESC3=0x%08lx\n",
+               (unsigned long)d->DESC0, (unsigned long)d->DESC1,
+               (unsigned long)d->DESC2, (unsigned long)d->DESC3);
         
         /* Flush Cache */
         SCB_CleanDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
@@ -751,10 +862,17 @@ static void stm32h7_recycle_rx_descriptor(uint32_t idx)
         heth.RxDescList.RxBuildDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
         heth.RxDescList.RxDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
         
+        printf("RECYCLE: After update - RxDescIdx=%lu, RxBuildDescIdx=%lu, RxBuildDescCnt=%lu\n",
+               (unsigned long)heth.RxDescList.RxDescIdx,
+               (unsigned long)heth.RxDescList.RxBuildDescIdx,
+               (unsigned long)heth.RxDescList.RxBuildDescCnt);
+        
         /* Kick DMA Tail Pointer */
         stm32h7_eth_kick_rx_dma();
+        printf("========== RECYCLE RX DESC END ==========\n\n");
     } else {
         printf("CRITICAL: Failed to recycle RX descriptor %lu\n", (unsigned long)idx);
+        printf("========== RECYCLE RX DESC END (FAILED) ==========\n\n");
     }
 }
 
@@ -770,6 +888,9 @@ static struct pbuf * low_level_input(struct netif *netif)
 {
   struct pbuf *p = NULL;
 
+  printf("\n========== LOW_LEVEL_INPUT START ==========\n");
+  printf("LLI: Checking for packets...\n");
+
   /* ETH_CODE: Manual Packet Read Strategy
    * We iterate through descriptors starting from RxDescIdx (Read Pointer).
    * If a descriptor is owned by CPU (OWN=0), we process it.
@@ -777,20 +898,32 @@ static struct pbuf * low_level_input(struct netif *netif)
   uint32_t idx = heth.RxDescList.RxDescIdx;
   ETH_DMADescTypeDef_Shadow *d = &DMARxDscrTab[idx];
 
+  printf("LLI: RxDescIdx=%lu, RxBuildDescIdx=%lu, RxBuildDescCnt=%lu\n",
+         (unsigned long)heth.RxDescList.RxDescIdx,
+         (unsigned long)heth.RxDescList.RxBuildDescIdx,
+         (unsigned long)heth.RxDescList.RxBuildDescCnt);
+
   /* ETH_CODE: Invalidate Cache BEFORE reading the descriptor!
    * The thread might be seeing stale cache (0s) while DMA updated RAM. */
   SCB_InvalidateDCache_by_Addr((uint32_t *)d, sizeof(ETH_DMADescTypeDef_Shadow));
 
+  printf("LLI: Desc[%lu] DESC0=0x%08lx, DESC1=0x%08lx, DESC2=0x%08lx, DESC3=0x%08lx\n",
+         (unsigned long)idx, (unsigned long)d->DESC0, (unsigned long)d->DESC1,
+         (unsigned long)d->DESC2, (unsigned long)d->DESC3);
+
   /* Check if the descriptor is owned by CPU (Bit 31 = 0) */
   if ((d->DESC3 & 0x80000000) == 0) {
+      printf("LLI: Descriptor %lu is CPU-owned (OWN=0)\n", (unsigned long)idx);
       
       /* Handle Context Descriptors (CTXT=1, Bit 30)
        * Context descriptors contain metadata (timestamps, etc.) and don't have packet data.
        * They must be recycled and skipped, not treated as packet descriptors. */
       if ((d->DESC3 & 0x40000000) != 0) {
+          printf("LLI: Context Descriptor detected (CTXT=1), recycling...\n");
           /* Recycle this context descriptor */
           stm32h7_recycle_rx_descriptor(idx);
           /* Return NULL to indicate no packet payload yet, caller will loop */
+          printf("========== LOW_LEVEL_INPUT END (Context Desc) ==========\n\n");
           return NULL;
       }
       
@@ -798,6 +931,7 @@ static struct pbuf * low_level_input(struct netif *netif)
       if ((d->DESC3 & 0x20000000) && (d->DESC3 & 0x10000000)) {
            /* First Desc (FD) + Last Desc (LD) set -> Single packet */
            uint32_t pkt_len = (d->DESC3 & 0x00007FFF);
+           printf("LLI: Single packet detected, len=%lu bytes\n", (unsigned long)pkt_len);
            
            /* Get the pbuf from the back-up address */
            if (DMARxDscrBackup[idx] != 0) {
@@ -806,6 +940,9 @@ static struct pbuf * low_level_input(struct netif *netif)
                
                /* ETH_CODE: Calculate actual buffer start (without +2 offset). */
                uint8_t *actual_buff = buff_with_offset - 2;
+               printf("LLI: Buffer address: backup=0x%08lx, actual=0x%08lx\n",
+                      (unsigned long)DMARxDscrBackup[idx], (unsigned long)actual_buff);
+               
                struct pbuf *p_manual = stm32h7_get_pbuf_from_buff(actual_buff);
                struct pbuf_custom *p_custom = (struct pbuf_custom *)p_manual;
                
@@ -820,6 +957,14 @@ static struct pbuf * low_level_input(struct netif *netif)
                    
                    /* Invalidate Cache for the received packet data */
                    SCB_InvalidateDCache_by_Addr((uint32_t *)actual_buff, pkt_len);
+                   printf("LLI: pbuf created successfully, p=0x%p, payload=0x%p\n", p, p->payload);
+                   
+                   /* Dump first 14 bytes (Ethernet header) */
+                   uint8_t *eth_hdr = (uint8_t *)p->payload;
+                   printf("LLI: Ethernet Header: %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x, type=0x%02x%02x\n",
+                          eth_hdr[0], eth_hdr[1], eth_hdr[2], eth_hdr[3], eth_hdr[4], eth_hdr[5],
+                          eth_hdr[6], eth_hdr[7], eth_hdr[8], eth_hdr[9], eth_hdr[10], eth_hdr[11],
+                          eth_hdr[12], eth_hdr[13]);
                } else {
                    printf("CRITICAL: pbuf_alloced_custom failed! Dropping packet.\n");
                }
@@ -834,6 +979,8 @@ static struct pbuf * low_level_input(struct netif *netif)
                HAL_ETH_RxAllocateCallback(&new_ptr);
                
                if (new_ptr) {
+                   printf("LLI: Refilling descriptor %lu with new buffer 0x%08lx\n",
+                          (unsigned long)idx, (unsigned long)new_ptr);
                    /* Update Descriptor */
                    d->DESC0 = (uint32_t)new_ptr;
                    DMARxDscrBackup[idx] = (uint32_t)new_ptr;
@@ -853,6 +1000,11 @@ static struct pbuf * low_level_input(struct netif *netif)
                    }
                    heth.RxDescList.RxBuildDescIdx = (idx + 1) % ETH_RX_DESC_CNT;
                    
+                   printf("LLI: After refill - RxDescIdx=%lu, RxBuildDescIdx=%lu, RxBuildDescCnt=%lu\n",
+                          (unsigned long)heth.RxDescList.RxDescIdx,
+                          (unsigned long)heth.RxDescList.RxBuildDescIdx,
+                          (unsigned long)heth.RxDescList.RxBuildDescCnt);
+                   
                    /* Kick DMA Tail Pointer */
                    stm32h7_eth_kick_rx_dma();
                } else {
@@ -865,11 +1017,14 @@ static struct pbuf * low_level_input(struct netif *netif)
       } else {
            /* Multi-fragment packet or strange state.
             * For now, just recycle it to keep queue moving. */
-           printf("Manual Read: Fragmented/Strange packet (DESC3=0x%08lx). Recycling.\n", (unsigned long)d->DESC3);
+           printf("LLI: Fragmented/Strange packet (DESC3=0x%08lx). Recycling.\n", (unsigned long)d->DESC3);
            stm32h7_recycle_rx_descriptor(idx);
       }
+  } else {
+      printf("LLI: Descriptor %lu is DMA-owned (OWN=1), no packet available\n", (unsigned long)idx);
   }
 
+  printf("========== LOW_LEVEL_INPUT END ==========\n\n");
   return p;
 }
 
@@ -893,18 +1048,23 @@ void ethernetif_input(void* argument)
   {
     if (sys_arch_sem_wait(&RxPktSemaphore, TIME_WAITING_FOR_INPUT) != SYS_ARCH_TIMEOUT)
     {
+      printf("\n========== ETHERNETIF_INPUT: SEMAPHORE SIGNALED ==========\n");
       do
       {
         p = low_level_input( netif );
         if (p != NULL)
         {
-          printf("RX: %u bytes\n", (unsigned int)p->tot_len);
+          printf("ETHERNETIF_INPUT: Got packet %u bytes, passing to netif->input\n", (unsigned int)p->tot_len);
           if (netif->input( p, netif) != ERR_OK )
           {
+            printf("ETHERNETIF_INPUT: netif->input failed, freeing pbuf\n");
             pbuf_free(p);
+          } else {
+            printf("ETHERNETIF_INPUT: netif->input succeeded\n");
           }
         }
       } while(p!=NULL);
+      printf("========== ETHERNETIF_INPUT: PROCESSING COMPLETE ==========\n\n");
     }
   }
 }
@@ -995,8 +1155,10 @@ err_t ethernetif_init(struct netif *netif)
   */
 void pbuf_free_custom(struct pbuf *p)
 {
-  printf("pbuf_free_custom: p=0x%p\n", p);
+  printf("\n========== PBUF_FREE_CUSTOM ==========\n");
+  printf("PBUF_FREE: p=0x%p, ref=%u, tot_len=%u\n", p, (unsigned int)p->ref, (unsigned int)p->tot_len);
   struct pbuf_custom* custom_pbuf = (struct pbuf_custom*)p;
+  printf("PBUF_FREE: custom_pbuf=0x%p, freeing to RX_POOL\n", custom_pbuf);
   LWIP_MEMPOOL_FREE(RX_POOL, custom_pbuf);
 
   /* If the Rx Buffer Pool was exhausted, signal the ethernetif_input task to
@@ -1004,9 +1166,11 @@ void pbuf_free_custom(struct pbuf *p)
 
   if (RxAllocStatus == RX_ALLOC_ERROR)
   {
+    printf("PBUF_FREE: RxAllocStatus was ERROR, signaling semaphore\n");
     RxAllocStatus = RX_ALLOC_OK;
     sys_sem_signal(&RxPktSemaphore);
   }
+  printf("========== PBUF_FREE_CUSTOM END ==========\n\n");
 }
 
 /* USER CODE BEGIN 6 */
@@ -1411,26 +1575,32 @@ void HAL_ETH_RxAllocateCallback(uint8_t **buff)
 {
 /* USER CODE BEGIN HAL ETH RxAllocateCallback */
 
+  printf("\n========== RX_ALLOCATE_CALLBACK ==========\n");
   struct pbuf_custom *p = LWIP_MEMPOOL_ALLOC(RX_POOL);
   if (p)
   {
+    printf("RX_ALLOC: Allocated pbuf_custom at 0x%p\n", p);
     /* Get the buff from the struct pbuf address. */
     /* ETH_CODE: With ETH_PAD_SIZE=2, DMA receives data at buff[2] so that IP header
      * is 4-byte aligned. The pbuf points to the actual buffer, but we report
      * buff+2 to the HAL so that DMA writes start at the correct offset. */
     *buff = (uint8_t *)p + offsetof(RxBuff_t, buff) + 2;
+    printf("RX_ALLOC: buff=0x%p (with +2 offset), actual buff=0x%p\n", *buff, (uint8_t *)p + offsetof(RxBuff_t, buff));
     p->custom_free_function = pbuf_free_custom;
     /* Initialize the struct pbuf.
     * This must be performed whenever a buffer's allocated because it may be
     * changed by lwIP or the app, e.g., pbuf_free decrements ref. */
     /* ETH_CODE: Pass actual buffer start (without +2) so pbuf knows the true memory location */
     pbuf_alloced_custom(PBUF_RAW, 0, PBUF_REF, p, (uint8_t *)p + offsetof(RxBuff_t, buff), ETH_RX_BUFFER_SIZE);
+    printf("RX_ALLOC: pbuf initialized successfully\n");
   }
   else
   {
+    printf("RX_ALLOC: FAILED - RX_POOL exhausted!\n");
     RxAllocStatus = RX_ALLOC_ERROR;
     *buff = NULL;
   }
+  printf("========== RX_ALLOCATE_CALLBACK END ==========\n\n");
 /* USER CODE END HAL ETH RxAllocateCallback */
 }
 
@@ -1486,7 +1656,11 @@ void HAL_ETH_TxFreeCallback(uint32_t * buff)
 {
 /* USER CODE BEGIN HAL ETH TxFreeCallback */
 
+  printf("\n========== TX_FREE_CALLBACK ==========\n");
+  printf("TX_FREE: buff=0x%p\n", buff);
   pbuf_free((struct pbuf *)buff);
+  printf("TX_FREE: pbuf freed\n");
+  printf("========== TX_FREE_CALLBACK END ==========\n\n");
 
 /* USER CODE END HAL ETH TxFreeCallback */
 }

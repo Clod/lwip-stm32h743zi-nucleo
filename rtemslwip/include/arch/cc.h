@@ -137,20 +137,10 @@ typedef u32_t               mem_ptr_t;
  #define IPADDR_WORDALIGNED_COPY_FROM_IP4_ADDR_T(dest, src) \
    IPADDR_WORDALIGNED_COPY_TO_IP4_ADDR_T(dest, src)
  
- #define ip4_addr_copy(dest, src) \
-   do { \
-     ((u8_t *)(&((dest).addr)))[0] = ((const u8_t *)(&((src).addr)))[0]; \
-     ((u8_t *)(&((dest).addr)))[1] = ((const u8_t *)(&((src).addr)))[1]; \
-     ((u8_t *)(&((dest).addr)))[2] = ((const u8_t *)(&((src).addr)))[2]; \
-     ((u8_t *)(&((dest).addr)))[3] = ((const u8_t *)(&((src).addr)))[3]; \
-   } while(0)
- 
- #define ip_addr_copy_from_ip4(dest, src) \
-   do { \
-     ip4_addr_copy(*ip_2_ip4(&(dest)), src); \
-     IP_SET_TYPE_VAL(dest, IPADDR_TYPE_V4); \
-     ip_clear_no4(&dest); \
-   } while(0)
+ /* Note: ip4_addr_copy and ip_addr_copy_from_ip4 are now provided by lwIP headers
+  * (ip4_addr.h and ip_addr.h) and should not be defined here to avoid
+  * redefinition warnings. The lwIP headers provide these macros with the same
+  * functionality. */
  
  /*
  *     1 - load byte by byte, construct 16 bits word and add: not efficient for most platforms
