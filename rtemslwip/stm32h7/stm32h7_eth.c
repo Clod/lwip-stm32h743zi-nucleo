@@ -189,13 +189,12 @@ static void stm32h7_eth_kick_rx_dma(void)
     // printf("KICK: Setting DMACRDTPR to 0x%08lx (last desc)\n",
     //        (unsigned long)&DMARxDscrTab[ETH_RX_DESC_CNT - 1]);
     
-    /* ETH_CODE: FIX - The tail pointer must ALWAYS point to the LAST descriptor
-     * in the ring. This tells DMA "descriptors 0 to N-1 are available for use".
-     *
-     * Previous buggy code set Tail = ReadIdx - 1, which told DMA "stop before ReadIdx"
-     * causing RBU because DMA saw no available descriptors.
+    /* ETH_CODE: FIX - The tail pointer must point AFTER the last descriptor.
+     * In Ring mode, the DMA processes descriptors up to (but not including)
+     * the address in the Tail Pointer. Pointing to the last descriptor (N-1)
+     * causes the DMA to stop before processing it.
      */
-    heth.Instance->DMACRDTPR = (uint32_t)&DMARxDscrTab[ETH_RX_DESC_CNT - 1];
+    heth.Instance->DMACRDTPR = (uint32_t)(DMARxDscrTab + ETH_RX_DESC_CNT);
     __DSB();
     
     /* Write Poll Demand to force immediate re-fetch of descriptors */
@@ -575,7 +574,7 @@ static void low_level_init(struct netif *netif)
 
   printf("Creating RxPktSemaphore...\n");
   /* create a binary semaphore used for informing ethernetif of frame reception */
-  if (sys_sem_new(&RxPktSemaphore, 1) != ERR_OK) {
+  if (sys_sem_new(&RxPktSemaphore, 0) != ERR_OK) {
         /* Handle error */
         printf("ERROR: Failed to create RxPktSemaphore\n");
   }
@@ -1471,6 +1470,14 @@ void ethernet_link_thread(void* argument)
          * BEFORE starting the DMA. This ensures the hardware sees "Ready"
          * descriptors immediately upon activation. */
         printf("ETH: Manually initializing RX descriptors...\n");
+
+        /* ETH_CODE: Reset software descriptor trackers to match hardware reset.
+         * The hardware DMA will start reading from the base address (Descriptor 0).
+         * We must ensure our software read pointer (RxDescIdx) matches. */
+        heth.RxDescList.RxDescIdx = 0;
+        heth.RxDescList.RxBuildDescIdx = 0;
+        heth.RxDescList.RxBuildDescCnt = 0;
+
         for (uint32_t i = 0; i < ETH_RX_DESC_CNT; i++) {
           uint8_t *ptr = NULL;
           HAL_ETH_RxAllocateCallback(&ptr);
@@ -1520,7 +1527,7 @@ void ethernet_link_thread(void* argument)
           
           /* ETH_CODE: internal "Kick" to DMA to poll RX descriptors immediately 
            * by updating the Tail Pointer to the end of the ring/list. */
-          heth.Instance->DMACRDTPR = (uint32_t)heth.RxDescList.pRxEnd;
+          heth.Instance->DMACRDTPR = (uint32_t)(DMARxDscrTab + ETH_RX_DESC_CNT);
         }
         
         /* ETH_CODE: Manually enable DMA interrupts to ensure they are properly configured

@@ -182,3 +182,25 @@
     *   Verify if `SCB_InvalidateDCache` is working effectively on the new descriptor 12-ring.
 2.  **Verify Data Integrity**: Once `RX` logs appear, verify the payload content is correct (ping/IP headers).
 
+----------------
+
+Here is the breakdown of what is happening based on the logs and the behavior of the STM32H7 Ethernet DMA:
+
+Packet Reception (Working): The DMA successfully receives packets from the PHY, writes the data into the RAM buffers (e.g., 0x3000b7b6), and updates the descriptors.
+Handover to CPU (Working): The DMA clears the OWN bit in the descriptor (setting it to 0), which signals to the CPU that "this slot is full, you can read it now." The logs show this happening for Descriptors 0, 1, and 2.
+The "Final Slot" Issue (The Bug): The DMA stops exactly before processing the final descriptor (Descriptor 3).
+Why it stops at the final slot
+The root cause is the configuration of the Tail Pointer (DMACRDTPR).
+
+How it works: The DMA processes descriptors starting from its current position up to—but not including—the address held in the Tail Pointer. It treats the Tail Pointer as a "Stop Sign."
+What happened: The logs show DMACRDTPR was set to 0x30000030. This is the address of Descriptor 3 (the 4th and final slot).
+The Result:
+DMA processes Desc 0.
+DMA processes Desc 1.
+DMA processes Desc 2.
+DMA prepares to process Desc 3 (0x30000030).
+DMA checks the Tail Pointer (0x30000030).
+Since Current Address == Tail Pointer, the DMA suspends reception immediately, triggering the Receive Buffer Unavailable (RBU) error.
+By setting the Tail Pointer to the address of the last descriptor, you inadvertently told the DMA: "Use the buffer, but stop right before the last slot."
+
+The fix (which appears in the code you provided in the context) moves the Tail Pointer to Start + 4, effectively placing the "Stop Sign" outside the ring buffer. This allows the DMA to process Descriptor 3 and wrap around to Descriptor 0 continuously.
