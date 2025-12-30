@@ -2,3 +2,4 @@ __pycache__
 .lock-waf*
 .waf*
 build/
+reference_stm32h7/
