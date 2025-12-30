@@ -182,6 +182,22 @@
     *   Verify if `SCB_InvalidateDCache` is working effectively on the new descriptor 12-ring.
 2.  **Verify Data Integrity**: Once `RX` logs appear, verify the payload content is correct (ping/IP headers).
 
+## MOD-010 [2025-12-30 21:55:00]
+**Category**: Bug Fix
+**Modified Files**: `rtemslwip/stm32h7/stm32h7_eth.c`
+**Description**: Fix TX packet corruption by skipping `ETH_PAD_SIZE` padding bytes.
+**Rationale**: With `ETH_PAD_SIZE=2`, LwIP adds 2 bytes of padding to the pbuf payload. The driver was transmitting these bytes, resulting in a malformed Ethernet frame (shifted by 2 bytes).
+**Implementation**: Added `pbuf_header(p, -ETH_PAD_SIZE)` before the copy loop in `low_level_output` and restored it with `pbuf_header(p, ETH_PAD_SIZE)` afterwards.
+**Testing & Results**:
+- **Test Method**: Wireshark/Packet Dump.
+- **Expected Outcome**: Correct Destination MAC address in transmitted packets.
+- **Actual Outcome**: ⏳ Pending
+- **Status**: ✓ Implementation Complete
+**Context**:
+- **Related Entries**: MOD-006
+- **Side Effects**: None expected.
+- **Next Steps**: Verify TX packet format.
+
 ----------------
 
 Here is the breakdown of what is happening based on the logs and the behavior of the STM32H7 Ethernet DMA:

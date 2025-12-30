@@ -665,6 +665,12 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
 
   memset(Txbuffer, 0 , ETH_TX_DESC_CNT*sizeof(ETH_BufferTypeDef));
 
+  /* ETH_CODE: Remove padding before transmission if ETH_PAD_SIZE is defined.
+   * LwIP adds padding to the pbuf payload, which we must skip for the MAC. */
+#if defined(ETH_PAD_SIZE) && (ETH_PAD_SIZE > 0)
+  pbuf_header(p, -ETH_PAD_SIZE);
+#endif
+
   /* ETH_CODE: Flatten pbuf chain into D2 SRAM bounce buffer */
   for(q = p; q != NULL; q = q->next)
   {
@@ -723,6 +729,11 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
   printf("TX: Descriptor [%lu] State AFTER DMA Completion:\n", (unsigned long)desc_idx);
   printf("    DESC0 (Addr) = 0x%08lx\n", (unsigned long)d->DESC0);
   printf("    DESC3 (Stat) = 0x%08lx (OWN bit should be 0)\n", (unsigned long)d->DESC3);
+
+  /* ETH_CODE: Restore padding so LwIP can free the pbuf correctly */
+#if defined(ETH_PAD_SIZE) && (ETH_PAD_SIZE > 0)
+  pbuf_header(p, ETH_PAD_SIZE);
+#endif
 
   HAL_ETH_ReleaseTxPacket(&heth);
   printf("TX: Packet released\n");
