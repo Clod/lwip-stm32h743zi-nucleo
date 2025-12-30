@@ -460,3 +460,129 @@ Valid Data:
 
 The PKT DUMP shows valid ARP packets (EtherType 0x0806) being received, indicating the memory offsets and cache invalidation logic are correct.
 Current Status: The RX path is stable and handling continuous traffic.
+
+
+---------------------------------
+*** STM32H7 LWIP TEST *** MPU_Config: CCR before = 0x00070200 MPU_Config: CCR after = 0x00070200 DEBUG: sizeof(ETH_HandleTypeDef) = 176 DEBUG: ETH_RX_DESC_CNT (Local Define) = 4 DEBUG: offsetof(RxDescList) = 72 DEBUG: offsetof(RxDescIdx) = 92 Ethernet MAC: 00:80:e1:00:00:00 Initializing RX pool at 0x30000600... ETH: DMA Descriptors committed to hardware: RXaddr=0x30000000, RXlen=4, TXaddr=0x30000400, TXlen=4 Installing ETH interrupt handler for vector 61... ETH interrupt handler installed successfully ETH: IRQ 61 enabled in NVIC Setting MAC address... Creating RxPktSemaphore... Creating TxPktSemaphore... Registering PHY IO... LAN8742 object at: 0x0x24001ee0 IOCtx at: 0x0x240000f0 IOCtx.Init = 0x0x800defd IOCtx.DeInit = 0x0x800df11 IOCtx.WriteReg = 0x0x800df55 IOCtx.ReadReg = 0x0x800df21 IOCtx.GetTick = 0x0x800df89 Testing HAL_GetTick: 80 After 100ms delay, HAL_GetTick: 190 Creating Ethernet threads... Waiting for Ethernet link to come up... etharp_timer ethernetif_input thread started, netif=0x0x2400061c Ethernet link thread started PHY: Resetting... PHY: Enabling auto-negotiation... etharp_timer etharp_timer PHY: Link Up detected (BSR=0x782d) Negotiated: 100Mbps Full Duplex ETH: Manually initializing RX descriptors...
+
+========== RX_ALLOCATE_CALLBACK ========== RX_ALLOC: Allocated pbuf_custom at 0x0x3000c3e0 RX_ALLOC: buff=0x0x3000c3f6 (with +2 offset), actual buff=0x0x3000c3f4 RX_ALLOC: pbuf initialized successfully ========== RX_ALLOCATE_CALLBACK END ==========
+
+RX Init Desc 0: addr=0x3000c3f6, bkup=0x3000c3f6, len=1536, DESC3=0xc1000000
+
+========== RX_ALLOCATE_CALLBACK ========== RX_ALLOC: Allocated pbuf_custom at 0x0x3000bdc0 RX_ALLOC: buff=0x0x3000bdd6 (with +2 offset), actual buff=0x0x3000bdd4 RX_ALLOC: pbuf initialized successfully ========== RX_ALLOCATE_CALLBACK END ==========
+
+RX Init Desc 1: addr=0x3000bdd6, bkup=0x3000bdd6, len=1536, DESC3=0xc1000000
+
+========== RX_ALLOCATE_CALLBACK ========== RX_ALLOC: Allocated pbuf_custom at 0x0x3000b7a0 RX_ALLOC: buff=0x0x3000b7b6 (with +2 offset), actual buff=0x0x3000b7b4 RX_ALLOC: pbuf initialized successfully ========== RX_ALLOCATE_CALLBACK END ==========
+
+RX Init Desc 2: addr=0x3000b7b6, bkup=0x3000b7b6, len=1536, DESC3=0xc1000000
+
+========== RX_ALLOCATE_CALLBACK ========== RX_ALLOC: Allocated pbuf_custom at 0x0x3000b180 RX_ALLOC: buff=0x0x3000b196 (with +2 offset), actual buff=0x0x3000b194 RX_ALLOC: pbuf initialized successfully ========== RX_ALLOCATE_CALLBACK END ==========
+
+RX Init Desc 3: addr=0x3000b196, bkup=0x3000b196, len=1536, DESC3=0xc1000000 ETH: RX descriptors initialized successfully HAL_ETH_Start_IT successful ETH: Enabling DMA interrupts... ETH: DMACIER = 0x0000d0c1, MACIER = 0x00006000 ETH: DMACSR = 0x00000000 ETH: SYSCFG_PMCR = 0x03800000 ETH: MACCR = 0x3830e003 RX Desc 0: 0x3000c3f6 0x00000000 0x00000600 0xc1000000 ETH: MACCR = 0x3830e003, MACPFR = 0x80000001, MACTSCR = 0x00000000 Ethernet link is UP Interface is UP. IP: 192.168.1.10 Starting lwiperf server on port 5001... tcp_bind: bind to port 5001 Heartbeat: Total IRQs: 0, RX Cplt: 0 LLI: Single packet detected, len=60 bytes LLI: Buffer address: backup=0x3000c3f6, actual=0x3000c3f4 LLI: pbuf created successfully, p=0x0x3000c3e0, payload=0x0x3000c3f4 (Padding included) PKT DUMP (60 bytes): 0000: ff ff ff ff ff ff e8 9a 8f 8e 40 d9 08 06 00 01 0010: 08 00 06 04 00 01 e8 9a 8f 8e 40 d9 c0 a8 01 14 0020: 00 00 00 00 00 00 c0 a8 01 0a 00 00 00 00 00 00 0030: 00 00 00 00 00 00 00 00 00 00 00 00 LLI: Ethernet Header: ff:ff:ff:ff:ff:ff -> e8:9a:8f:8e:40:d9, type=0x0806
+
+========== RX_ALLOCATE_CALLBACK ========== RX_ALLOC: Allocated pbuf_custom at 0x0x3000ab60 RX_ALLOC: buff=0x0x3000ab76 (with +2 offset), actual buff=0x0x3000ab74 RX_ALLOC: pbuf initialized successfully ========== RX_ALLOCATE_CALLBACK END ==========
+
+LLI: Refilling descriptor 0 with new buffer 0x3000ab76 LLI: After refill - RxDescIdx=0, RxBuildDescIdx=1, RxBuildDescCnt=4 ETHERNETIF_INPUT: Got packet 62 bytes, passing to netif->input ETHERNETIF_INPUT: netif->input succeeded ethernet_input: dest:ff:ff:ff:ff:ff:ff, src:e8:9a:8f:8e:40:d9, type:806 etharp_update_arp_entry: 192.168.1.20 - e8:9a:8f:8e:40:d9 etharp_find_entry: found empty entry 0 etharp_find_entry: selecting empty entry 0 etharp_update_arp_entry: updating stable entry 0 etharp_input: incoming ARP request etharp_raw: sending raw ARP packet. ethernet_output: sending packet 0x24001f7c
+
+========== TX START ========== TX: low_level_output called, p=0x0x24001f7c, tot_len=44 TX: Copied 44 bytes from 0x0x24001f8c to 0x0x3000d000 (Offset 0) TX DATA DUMP (44 bytes):
+
+0000: 00 00 e8 9a 8f 8e 40 d9 00 80 e1 00 00 00 08 06 0010: 00 01 08 00 06 04 00 02 00 80 e1 00 00 00 c0 a8 0020: 01 0a e8 9a 8f 8e 40 d9 c0 a8 01 14
+
+TX: Calling HAL_ETH_Transmit_IT (Desc Index 0) TX: Descriptor [0] State AFTER HAL Setup: DESC0 (Addr) = 0x3000d000 (Should be 0x3000d000) DESC1 = 0x00000000 DESC2 (Len) = 0x8000002c DESC3 (Ctrl) = 0x30000000 (OWN bit should be 1) TX: DMA Registers: DMACSR = 0x00000404 DMACTDTPR = 0x30000410 TX: Waiting for TxPktSemaphore... TX: TxPktSemaphore acquired TX: Descriptor [0] State AFTER DMA Completion: DESC0 (Addr) = 0x3000d000 DESC3 (Stat) = 0x30000000 (OWN bit should be 0)
+
+========== TX_FREE_CALLBACK ========== TX_FREE: buff=0x0x24001f7c TX_FREE: pbuf freed ========== TX_FREE_CALLBACK END ==========
+
+TX: Packet released ========== TX END ==========
+
+========== PBUF_FREE_CUSTOM ========== PBUF_FREE: p=0x0x3000c3e0, ref=0, tot_len=46 PBUF_FREE: custom_pbuf=0x0x3000c3e0, freeing to RX_POOL ========== PBUF_FREE_CUSTOM END ==========
+
+etharp_timer LLI: Single packet detected, len=60 bytes LLI: Buffer address: backup=0x3000bdd6, actual=0x3000bdd4 LLI: pbuf created successfully, p=0x0x3000bdc0, payload=0x0x3000bdd4 (Padding included) PKT DUMP (60 bytes): 0000: ff ff ff ff ff ff e8 9a 8f 8e 40 d9 08 06 00 01 0010: 08 00 06 04 00 01 e8 9a 8f 8e 40 d9 c0 a8 01 14 0020: 00 00 00 00 00 00 c0 a8 01 0a 00 00 00 00 00 00 0030: 00 00 00 00 00 00 00 00 00 00 00 00 LLI: Ethernet Header: ff:ff:ff:ff:ff:ff -> e8:9a:8f:8e:40:d9, type=0x0806
+
+========== RX_ALLOCATE_CALLBACK ========== RX_ALLOC: Allocated pbuf_custom at 0x0x3000c3e0 RX_ALLOC: buff=0x0x3000c3f6 (with +2 offset), actual buff=0x0x3000c3f4 RX_ALLOC: pbuf initialized successfully ========== RX_ALLOCATE_CALLBACK END ==========
+
+LLI: Refilling descriptor 1 with new buffer 0x3000c3f6 LLI: After refill - RxDescIdx=1, RxBuildDescIdx=2, RxBuildDescCnt=4 ETHERNETIF_INPUT: Got packet 62 bytes, passing to netif->input ETHERNETIF_INPUT: netif->input succeeded ethernet_input: dest:ff:ff:ff:ff:ff:ff, src:e8:9a:8f:8e:40:d9, type:806 etharp_update_arp_entry: 192.168.1.20 - e8:9a:8f:8e:40:d9 etharp_find_entry: found matching entry 0 etharp_update_arp_entry: updating stable entry 0 etharp_input: incoming ARP request etharp_raw: sending raw ARP packet. ethernet_output: sending packet 0x24001f7c
+
+========== TX START ========== TX: low_level_output called, p=0x0x24001f7c, tot_len=44 TX: Copied 44 bytes from 0x0x24001f8c to 0x0x3000d000 (Offset 0) TX DATA DUMP (44 bytes):
+
+0000: 00 00 e8 9a 8f 8e 40 d9 00 80 e1 00 00 00 08 06 0010: 00 01 08 00 06 04 00 02 00 80 e1 00 00 00 c0 a8 0020: 01 0a e8 9a 8f 8e 40 d9 c0 a8 01 14
+
+TX: Calling HAL_ETH_Transmit_IT (Desc Index 1) TX: Descriptor [1] State AFTER HAL Setup: DESC0 (Addr) = 0x3000d000 (Should be 0x3000d000) DESC1 = 0x00000000 DESC2 (Len) = 0x8000002c DESC3 (Ctrl) = 0x30000000 (OWN bit should be 1) TX: DMA Registers: DMACSR = 0x00000404 DMACTDTPR = 0x30000420 TX: Waiting for TxPktSemaphore... TX: TxPktSemaphore acquired TX: Descriptor [1] State AFTER DMA Completion: DESC0 (Addr) = 0x3000d000 DESC3 (Stat) = 0x30000000 (OWN bit should be 0)
+
+========== TX_FREE_CALLBACK ========== TX_FREE: buff=0x0x24001f7c TX_FREE: pbuf freed ========== TX_FREE_CALLBACK END ==========
+
+TX: Packet released ========== TX END ==========
+
+========== PBUF_FREE_CUSTOM ========== PBUF_FREE: p=0x0x3000bdc0, ref=0, tot_len=46 PBUF_FREE: custom_pbuf=0x0x3000bdc0, freeing to RX_POOL ========== PBUF_FREE_CUSTOM END ==========
+
+etharp_timer Heartbeat: Total IRQs: 4, RX Cplt: 2 LLI: Single packet detected, len=60 bytes LLI: Buffer address: backup=0x3000b7b6, actual=0x3000b7b4 LLI: pbuf created successfully, p=0x0x3000b7a0, payload=0x0x3000b7b4 (Padding included) PKT DUMP (60 bytes): 0000: ff ff ff ff ff ff e8 9a 8f 8e 40 d9 08 06 00 01 0010: 08 00 06 04 00 01 e8 9a 8f 8e 40 d9 c0 a8 01 14 0020: 00 00 00 00 00 00 c0 a8 01 0a 00 00 00 00 00 00 0030: 00 00 00 00 00 00 00 00 00 00 00 00 LLI: Ethernet Header: ff:ff:ff:ff:ff:ff -> e8:9a:8f:8e:40:d9, type=0x0806
+
+========== RX_ALLOCATE_CALLBACK ========== RX_ALLOC: Allocated pbuf_custom at 0x0x3000bdc0 RX_ALLOC: buff=0x0x3000bdd6 (with +2 offset), actual buff=0x0x3000bdd4 RX_ALLOC: pbuf initialized successfully ========== RX_ALLOCATE_CALLBACK END ==========
+
+LLI: Refilling descriptor 2 with new buffer 0x3000bdd6 LLI: After refill - RxDescIdx=2, RxBuildDescIdx=3, RxBuildDescCnt=4 ETHERNETIF_INPUT: Got packet 62 bytes, passing to netif->input ETHERNETIF_INPUT: netif->input succeeded ethernet_input: dest:ff:ff:ff:ff:ff:ff, src:e8:9a:8f:8e:40:d9, type:806 etharp_update_arp_entry: 192.168.1.20 - e8:9a:8f:8e:40:d9 etharp_find_entry: found matching entry 0 etharp_update_arp_entry: updating stable entry 0 etharp_input: incoming ARP request etharp_raw: sending raw ARP packet. ethernet_output: sending packet 0x24001f7c
+
+========== TX START ========== TX: low_level_output called, p=0x0x24001f7c, tot_len=44 TX: Copied 44 bytes from 0x0x24001f8c to 0x0x3000d000 (Offset 0) TX DATA DUMP (44 bytes):
+
+0000: 00 00 e8 9a 8f 8e 40 d9 00 80 e1 00 00 00 08 06 0010: 00 01 08 00 06 04 00 02 00 80 e1 00 00 00 c0 a8 0020: 01 0a e8 9a 8f 8e 40 d9 c0 a8 01 14
+
+TX: Calling HAL_ETH_Transmit_IT (Desc Index 2) TX: Descriptor [2] State AFTER HAL Setup: DESC0 (Addr) = 0x3000d000 (Should be 0x3000d000) DESC1 = 0x00000000 DESC2 (Len) = 0x8000002c DESC3 (Ctrl) = 0x30000000 (OWN bit should be 1) TX: DMA Registers: DMACSR = 0x00000404 DMACTDTPR = 0x30000430 TX: Waiting for TxPktSemaphore... TX: TxPktSemaphore acquired TX: Descriptor [2] State AFTER DMA Completion: DESC0 (Addr) = 0x3000d000 DESC3 (Stat) = 0x30000000 (OWN bit should be 0)
+
+========== TX_FREE_CALLBACK ========== TX_FREE: buff=0x0x24001f7c TX_FREE: pbuf freed ========== TX_FREE_CALLBACK END ==========
+
+TX: Packet released ========== TX END ==========
+
+========== PBUF_FREE_CUSTOM ========== PBUF_FREE: p=0x0x3000b7a0, ref=0, tot_len=46 PBUF_FREE: custom_pbuf=0x0x3000b7a0, freeing to RX_POOL ========== PBUF_FREE_CUSTOM END ==========
+
+etharp_timer LLI: Single packet detected, len=60 bytes LLI: Buffer address: backup=0x3000b196, actual=0x3000b194 LLI: pbuf created successfully, p=0x0x3000b180, payload=0x0x3000b194 (Padding included) PKT DUMP (60 bytes): 0000: ff ff ff ff ff ff e8 9a 8f 8e 40 d9 08 06 00 01 0010: 08 00 06 04 00 01 e8 9a 8f 8e 40 d9 c0 a8 01 14 0020: 00 00 00 00 00 00 c0 a8 01 0a 00 00 00 00 00 00 0030: 00 00 00 00 00 00 00 00 00 00 00 00 LLI: Ethernet Header: ff:ff:ff:ff:ff:ff -> e8:9a:8f:8e:40:d9, type=0x0806
+
+========== RX_ALLOCATE_CALLBACK ========== RX_ALLOC: Allocated pbuf_custom at 0x0x3000b7a0 RX_ALLOC: buff=0x0x3000b7b6 (with +2 offset), actual buff=0x0x3000b7b4 RX_ALLOC: pbuf initialized successfully ========== RX_ALLOCATE_CALLBACK END ==========
+
+LLI: Refilling descriptor 3 with new buffer 0x3000b7b6 LLI: After refill - RxDescIdx=3, RxBuildDescIdx=0, RxBuildDescCnt=4 ETHERNETIF_INPUT: Got packet 62 bytes, passing to netif->input ETHERNETIF_INPUT: netif->input succeeded ethernet_input: dest:ff:ff:ff:ff:ff:ff, src:e8:9a:8f:8e:40:d9, type:806 etharp_update_arp_entry: 192.168.1.20 - e8:9a:8f:8e:40:d9 etharp_find_entry: found matching entry 0 etharp_update_arp_entry: updating stable entry 0 etharp_input: incoming ARP request etharp_raw: sending raw ARP packet. ethernet_output: sending packet 0x24001f7c
+
+========== TX START ========== TX: low_level_output called, p=0x0x24001f7c, tot_len=44 TX: Copied 44 bytes from 0x0x24001f8c to 0x0x3000d000 (Offset 0) TX DATA DUMP (44 bytes):
+
+0000: 00 00 e8 9a 8f 8e 40 d9 00 80 e1 00 00 00 08 06 0010: 00 01 08 00 06 04 00 02 00 80 e1 00 00 00 c0 a8 0020: 01 0a e8 9a 8f 8e 40 d9 c0 a8 01 14
+
+TX: Calling HAL_ETH_Transmit_IT (Desc Index 3) TX: Descriptor [3] State AFTER HAL Setup: DESC0 (Addr) = 0x3000d000 (Should be 0x3000d000) DESC1 = 0x00000000 DESC2 (Len) = 0x8000002c DESC3 (Ctrl) = 0x30000000 (OWN bit should be 1) TX: DMA Registers: DMACSR = 0x00000404 DMACTDTPR = 0x30000400 TX: Waiting for TxPktSemaphore... TX: TxPktSemaphore acquired TX: Descriptor [3] State AFTER DMA Completion: DESC0 (Addr) = 0x3000d000 DESC3 (Stat) = 0x30000000 (OWN bit should be 0)
+
+========== TX_FREE_CALLBACK ========== TX_FREE: buff=0x0x24001f7c TX_FREE: pbuf freed ========== TX_FREE_CALLBACK END ==========
+
+TX: Packet released ========== TX END ==========
+
+========== PBUF_FREE_CUSTOM ========== PBUF_FREE: p=0x0x3000b180, ref=0, tot_len=46 PBUF_FREE: custom_pbuf=0x0x3000b180, freeing to RX_POOL ========== PBUF_FREE_CUSTOM END ==========
+
+etharp_timer
+
+just make a diagnostic, do not propose any fixes for now
+
+
+Gemini
+Responding with gemini-3-pro
+Thinking
+Based on the provided logs, here is the diagnostic analysis of the issue.
+
+Diagnostic: TX Packet Corruption (Padding Issue)
+The system is successfully receiving packets (RX), processing them (ARP Request), and attempting to transmit a reply (TX). However, the transmitted packets are malformed, causing the remote host (PC) to ignore them.
+
+1. Evidence of Success (RX & Logic)
+RX Works: The log shows RX Desc 0, 1, 2, 3 receiving packets sequentially.
+Logic Works: The stack identifies the ARP Request (Who has 192.168.1.10?) and generates an ARP Reply (192.168.1.10 is at 00:80:e1...).
+TX Hardware Works: The DMA completes the transfer (TX: Descriptor [x] State AFTER DMA Completion: ... OWN bit should be 0), and the semaphore is acquired.
+2. The Problem: Malformed TX Packet
+The transmitted packet contains 2 extra bytes of zeros at the beginning. This shifts the entire Ethernet frame, making the Destination MAC Address incorrect on the wire.
+
+From the Log:
+
+text
+TX DATA DUMP (44 bytes):
+  0000: 00 00 e8 9a 8f 8e 40 d9 00 80 e1 00 00 00 08 06 ...
+What is sent: 00 00 e8 9a 8f 8e ...
+What should be sent: e8 9a 8f 8e 40 d9 ... (Destination MAC)
+Because of the leading 00 00, the receiving device sees the Destination MAC as 00:00:e8:9a:8f:8e instead of its own MAC (e8:9a:8f:8e:40:d9). Consequently, it drops the packet.
+
+3. Root Cause: ETH_PAD_SIZE
+It appears ETH_PAD_SIZE is defined as 2 in your lwipopts.h.
+
+In RX: You correctly handle this by manually adjusting the payload pointer: p->payload = (uint8_t *)p->payload + 2;.
+In TX: LwIP's ethernet_output function automatically adds ETH_PAD_SIZE bytes to the pbuf payload pointer before calling your low_level_output. This is intended to allow drivers to align data or insert headers.
+The Failure: Your low_level_output blindly copies the entire pbuf (including the 2 padding bytes) into the transmit bounce buffer.

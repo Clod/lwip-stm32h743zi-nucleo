@@ -107,6 +107,10 @@ typedef struct __attribute__((aligned(32)))
 #define ETH_RX_BUFFER_CNT             32U
 #define RX_POOL_BASE_ADDR             0x30000600
 
+/* ETH_CODE: Define TX Bounce Buffer in D2 SRAM to ensure DMA accessibility */
+#define ETH_TX_BUFFER_ADDR            0x3000D000
+#define ETH_TX_BUFFER_MAX_SIZE        1536
+
 #if MEMP_STATS
 static struct stats_mem memp_stats_RX_POOL;
 #endif
@@ -581,7 +585,7 @@ static void low_level_init(struct netif *netif)
 
   printf("Creating TxPktSemaphore...\n");
   /* create a binary semaphore used for informing ethernetif of frame transmission */
-  if (sys_sem_new(&TxPktSemaphore, 1) != ERR_OK) {
+  if (sys_sem_new(&TxPktSemaphore, 0) != ERR_OK) {
         /* Handle error */
         printf("ERROR: Failed to create TxPktSemaphore\n");
   }
@@ -645,65 +649,80 @@ static void low_level_init(struct netif *netif)
 
 static err_t low_level_output(struct netif *netif, struct pbuf *p)
 {
-  uint32_t i = 0U;
   struct pbuf *q = NULL;
   err_t errval = ERR_OK;
   ETH_BufferTypeDef Txbuffer[ETH_TX_DESC_CNT];
+  uint8_t *tx_bounce_buffer = (uint8_t *)ETH_TX_BUFFER_ADDR;
+  uint32_t total_len = 0;
 
   printf("\n========== TX START ==========\n");
   printf("TX: low_level_output called, p=0x%p, tot_len=%u\n", p, (unsigned int)p->tot_len);
   
-  memset(Txbuffer, 0 , ETH_TX_DESC_CNT*sizeof(ETH_BufferTypeDef));
-
-  for(q = p; q != NULL; q = q->next)
-  {
-    if(i >= ETH_TX_DESC_CNT)
-      return ERR_IF;
-
-    Txbuffer[i].buffer = q->payload;
-    Txbuffer[i].len = q->len;
-    printf("TX: pbuf[%lu] payload=0x%p, len=%u\n", (unsigned long)i, q->payload, (unsigned int)q->len);
-
-    if(i>0)
-    {
-      Txbuffer[i-1].next = &Txbuffer[i];
-    }
-
-    if(q->next == NULL)
-    {
-      Txbuffer[i].next = NULL;
-    }
-
-    i++;
+  if (p->tot_len > ETH_TX_BUFFER_MAX_SIZE) {
+      printf("TX ERROR: Packet too large for bounce buffer (%u > %u)\n", (unsigned int)p->tot_len, ETH_TX_BUFFER_MAX_SIZE);
+      return ERR_BUF;
   }
 
-  TxConfig.Length = p->tot_len;
+  memset(Txbuffer, 0 , ETH_TX_DESC_CNT*sizeof(ETH_BufferTypeDef));
+
+  /* ETH_CODE: Flatten pbuf chain into D2 SRAM bounce buffer */
+  for(q = p; q != NULL; q = q->next)
+  {
+    memcpy(tx_bounce_buffer + total_len, q->payload, q->len);
+    printf("TX: Copied %u bytes from 0x%p to 0x%p (Offset %lu)\n", 
+           (unsigned int)q->len, q->payload, (tx_bounce_buffer + total_len), (unsigned long)total_len);
+    total_len += q->len;
+  }
+
+  /* ETH_CODE: Insane Logging - Hex Dump of Bounce Buffer */
+  printf("TX DATA DUMP (%lu bytes):\n", (unsigned long)total_len);
+  for(uint32_t k=0; k<total_len; k++) {
+       if(k%16 == 0) printf("\n  %04x: ", (unsigned int)k);
+       printf("%02x ", tx_bounce_buffer[k]);
+  }
+  printf("\n\n");
+
+  /* ETH_CODE: Setup TxConfig to use the single bounce buffer */
+  Txbuffer[0].buffer = tx_bounce_buffer;
+  Txbuffer[0].len = total_len;
+  Txbuffer[0].next = NULL;
+
+  TxConfig.Length = total_len;
   TxConfig.TxBuffer = Txbuffer;
   TxConfig.pData = p;
 
   pbuf_ref(p);
 
-  for(q = p; q != NULL; q = q->next)
-  {
-    SCB_CleanDCache_by_Addr((uint32_t *)q->payload, q->len);
-  }
+  /* ETH_CODE: Clean D2 Cache for the bounce buffer to ensure DMA sees the data */
+  SCB_CleanDCache_by_Addr((uint32_t *)tx_bounce_buffer, total_len);
 
-  printf("TX: Cache cleaned, calling HAL_ETH_Transmit_IT\n");
-  printf("TX: CurTxDesc=%lu before transmit\n", (unsigned long)heth.TxDescList.CurTxDesc);
+  /* Capture current descriptor index before HAL increments it */
+  uint32_t desc_idx = heth.TxDescList.CurTxDesc;
+
+  printf("TX: Calling HAL_ETH_Transmit_IT (Desc Index %lu)\n", (unsigned long)desc_idx);
   
-  /* Dump TX descriptors before transmit */
-  for(int j=0; j<ETH_TX_DESC_CNT; j++) {
-    ETH_DMADescTypeDef_Shadow *d = &DMATxDscrTab[j];
-    printf("TX: Desc[%d] DESC0=0x%08lx, DESC1=0x%08lx, DESC2=0x%08lx, DESC3=0x%08lx\n", j,
-           (unsigned long)d->DESC0, (unsigned long)d->DESC1,
-           (unsigned long)d->DESC2, (unsigned long)d->DESC3);
-  }
-
   HAL_ETH_Transmit_IT(&heth, &TxConfig);
   
+  /* ETH_CODE: Insane Logging - Dump Descriptor AFTER HAL setup but BEFORE DMA completion (mostly) */
+  ETH_DMADescTypeDef_Shadow *d = &DMATxDscrTab[desc_idx];
+  printf("TX: Descriptor [%lu] State AFTER HAL Setup:\n", (unsigned long)desc_idx);
+  printf("    DESC0 (Addr) = 0x%08lx (Should be 0x%08lx)\n", (unsigned long)d->DESC0, (unsigned long)ETH_TX_BUFFER_ADDR);
+  printf("    DESC1        = 0x%08lx\n", (unsigned long)d->DESC1);
+  printf("    DESC2 (Len)  = 0x%08lx\n", (unsigned long)d->DESC2);
+  printf("    DESC3 (Ctrl) = 0x%08lx (OWN bit should be 1)\n", (unsigned long)d->DESC3);
+  
+  printf("TX: DMA Registers:\n");
+  printf("    DMACSR   = 0x%08lx\n", (unsigned long)heth.Instance->DMACSR);
+  printf("    DMACTDTPR = 0x%08lx\n", (unsigned long)heth.Instance->DMACTDTPR);
+
   printf("TX: Waiting for TxPktSemaphore...\n");
   sys_arch_sem_wait(&TxPktSemaphore, TIME_WAITING_FOR_INPUT);
   printf("TX: TxPktSemaphore acquired\n");
+
+  /* ETH_CODE: Insane Logging - Dump Descriptor AFTER DMA Completion */
+  printf("TX: Descriptor [%lu] State AFTER DMA Completion:\n", (unsigned long)desc_idx);
+  printf("    DESC0 (Addr) = 0x%08lx\n", (unsigned long)d->DESC0);
+  printf("    DESC3 (Stat) = 0x%08lx (OWN bit should be 0)\n", (unsigned long)d->DESC3);
 
   HAL_ETH_ReleaseTxPacket(&heth);
   printf("TX: Packet released\n");
@@ -929,24 +948,28 @@ static struct pbuf * low_level_input(struct netif *netif)
                struct pbuf *p_manual = stm32h7_get_pbuf_from_buff(actual_buff);
                struct pbuf_custom *p_custom = (struct pbuf_custom *)p_manual;
 
+               /* ETH_CODE: Use pbuf_alloced_custom with actual buffer start.
+                * We include ETH_PAD_SIZE (2 bytes) in the length so LwIP can strip it.
+                * Note: We do NOT manually adjust p->payload here. LwIP's ethernet_input
+                * will do pbuf_header(p, -ETH_PAD_SIZE) to skip the padding. */
                p_custom->custom_free_function = pbuf_free_custom;
-               p = pbuf_alloced_custom(PBUF_RAW, pkt_len, PBUF_REF, p_custom, actual_buff, ETH_RX_BUFFER_SIZE);
+               p = pbuf_alloced_custom(PBUF_RAW, pkt_len + 2, PBUF_REF, p_custom, actual_buff, ETH_RX_BUFFER_SIZE);
 
                if (p != NULL) {
-                   p->payload = (uint8_t *)p->payload + 2;
                    SCB_InvalidateDCache_by_Addr((uint32_t *)actual_buff, pkt_len);
-                   printf("LLI: pbuf created successfully, p=0x%p, payload=0x%p\n", p, p->payload);
+                   printf("LLI: pbuf created successfully, p=0x%p, payload=0x%p (Padding included)\n", p, p->payload);
                    
                    /* Dump packet content */
                    printf("PKT DUMP (%lu bytes):", (unsigned long)pkt_len);
-                   uint8_t *pd = (uint8_t *)p->payload;
+                   /* ETH_CODE: Skip padding for dump visualization */
+                   uint8_t *pd = (uint8_t *)p->payload + 2;
                    for(uint32_t k=0; k<pkt_len; k++) {
                        if(k%16 == 0) printf("\n  %04x: ", (unsigned int)k);
                        printf("%02x ", pd[k]);
                    }
                    printf("\n");
 
-                   uint8_t *eth_hdr = (uint8_t *)p->payload;
+                   uint8_t *eth_hdr = (uint8_t *)p->payload + 2;
                    printf("LLI: Ethernet Header: %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x, type=0x%02x%02x\n",
                           eth_hdr[0], eth_hdr[1], eth_hdr[2], eth_hdr[3], eth_hdr[4], eth_hdr[5],
                           eth_hdr[6], eth_hdr[7], eth_hdr[8], eth_hdr[9], eth_hdr[10], eth_hdr[11],
