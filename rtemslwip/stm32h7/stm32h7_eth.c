@@ -1540,8 +1540,14 @@ void ethernet_link_thread(void* argument)
         /* Set the Ethernet state to started */
         heth.gState = HAL_ETH_STATE_STARTED;
         
+        /* Initialize TX descriptor to start from beginning */
+        heth.TxDescList.CurTxDesc = 0;
+        
         /* Kick the RX DMA tail pointer */
         heth.Instance->DMACRDTPR = (uint32_t)(DMARxDscrTab + ETH_RX_DESC_CNT);
+        
+        /* Set TX DMA tail pointer to enable transmission */
+        heth.Instance->DMACTDTPR = (uint32_t)(DMATxDscrTab + ETH_TX_DESC_CNT);
         
         TRACE_PRINTF("ETH: Manual start complete\n");
         

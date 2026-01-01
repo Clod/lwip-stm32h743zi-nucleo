@@ -56,11 +56,14 @@ static rtems_task Init(rtems_task_argument argument)
 
   extern __IO uint32_t EthIrqCount;
   extern __IO uint32_t RxIrqCount;
+  extern ETH_HandleTypeDef heth;
   while(1) {
-    TRACE_PRINTF("Heartbeat: Total IRQs: %lu, RX Cplt: %lu\n", 
-           (unsigned long)EthIrqCount, (unsigned long)RxIrqCount);
-    (void)EthIrqCount;
-    (void)RxIrqCount;
+    printf("HB: IRQs=%lu Rx=%lu RxIdx=%lu/%lu/%lu TxIdx=%lu\n", 
+           (unsigned long)EthIrqCount, (unsigned long)RxIrqCount,
+           (unsigned long)heth.RxDescList.RxDescIdx,
+           (unsigned long)heth.RxDescList.RxBuildDescIdx,
+           (unsigned long)heth.RxDescList.RxBuildDescCnt,
+           (unsigned long)heth.TxDescList.CurTxDesc);
     rtems_task_wake_after(RTEMS_MILLISECONDS_TO_TICKS(2000));
   }
 
