@@ -8,6 +8,7 @@
 #include "stm32h7_eth.h"
 #include <stdio.h>
 #include "tmacros.h"
+#include "trace_config.h"
 
 const char rtems_test_name[] = "STM32H7 LWIP TEST";
 
@@ -56,8 +57,10 @@ static rtems_task Init(rtems_task_argument argument)
   extern __IO uint32_t EthIrqCount;
   extern __IO uint32_t RxIrqCount;
   while(1) {
-    printf("Heartbeat: Total IRQs: %lu, RX Cplt: %lu\n", 
+    TRACE_PRINTF("Heartbeat: Total IRQs: %lu, RX Cplt: %lu\n", 
            (unsigned long)EthIrqCount, (unsigned long)RxIrqCount);
+    (void)EthIrqCount;
+    (void)RxIrqCount;
     rtems_task_wake_after(RTEMS_MILLISECONDS_TO_TICKS(2000));
   }
 
