@@ -33,6 +33,7 @@
 #include "lwip/sys.h"
 #include "lwip/tcpip.h"
 #include <rtems/irq-extension.h>
+#include "../test/stm32h7_test/trace_config.h"
 
 /* Within 'USER CODE' section, code will be kept by default at each generation */
 /* USER CODE BEGIN 0 */
@@ -109,11 +110,11 @@ typedef struct __attribute__((aligned(32)))
 } RxBuff_t;
 
 /* Memory Pool Manual Declaration (points to D2 SRAM) */
-#define ETH_RX_BUFFER_CNT             32U
+#define ETH_RX_BUFFER_CNT             64U
 #define RX_POOL_BASE_ADDR             0x30000600
 
 /* ETH_CODE: Define TX Bounce Buffer in D2 SRAM to ensure DMA accessibility */
-#define ETH_TX_BUFFER_ADDR            0x3000D000
+#define ETH_TX_BUFFER_ADDR            0x30020000
 #define ETH_TX_BUFFER_MAX_SIZE        1536
 
 #if MEMP_STATS

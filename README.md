@@ -23,6 +23,13 @@ Installation Instructions
      ./waf install
      ```
 
+     For STM32H743ZI Nucleo board:
+
+     ```shell
+     ./waf configure --rtems-bsps=arm/nucleo-h743zi --rtems=/opt/rtems/6.1 --rtems-version=6
+     ./waf build
+     ```
+
 More `waf` arguments can be found by using:
 
   ```shell
