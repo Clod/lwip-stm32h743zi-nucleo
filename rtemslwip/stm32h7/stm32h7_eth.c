@@ -795,7 +795,7 @@ static void __attribute__((unused)) ethernetif_rebuild_rx_descriptors(void)
             DMARxDscrTab[idx].DESC0 = (uint32_t)ptr;
             DMARxDscrBackup[idx] = (uint32_t)ptr;
             DMARxDscrTab[idx].DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
-            DMARxDscrTab[idx].DESC3 = 0x80000000 | 0x01000000; /* OWN + BUF1V */
+            DMARxDscrTab[idx].DESC3 = 0x80000000 | 0x40000000 | 0x01000000; /* OWN + IOC + BUF1V */
             SCB_CleanDCache_by_Addr((uint32_t *)&DMARxDscrTab[idx], sizeof(ETH_DMADescTypeDef_Shadow));
             __DSB();
             heth.RxDescList.RxBuildDescCnt++;
@@ -1502,9 +1502,8 @@ void ethernet_link_thread(void* argument)
             DMARxDscrTab[i].DESC2 = (heth.Init.RxBuffLen & 0x3FFF);
             /* Set bits: 
              * 31 (OWN): DMA owns the descriptor
-             * 30 (IOC): Interrupt On Completion (Enable this!)
-             * 24 (BUF1V): Buffer 1 is valid
-             * Note: IOC (Bit 30) is CRITICAL for receiving interrupts. */
+             * 30 (IOC): Interrupt On Completion  
+             * 24 (BUF1V): Buffer 1 is valid */
             DMARxDscrTab[i].DESC3 = 0x80000000 | 0x40000000 | 0x01000000;
             
             /* ETH_CODE: Clean DCache to ensure DMA sees these values in RAM! */
