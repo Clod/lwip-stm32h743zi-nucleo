@@ -56,6 +56,18 @@
 
 /* Sane defaults that the configuration or BSP can override */
 
+/* Debug Options - Disable to improve throughput */
+#undef LWIP_DEBUG
+#define LWIP_DEBUG 0
+#undef ETHARP_DEBUG
+#define ETHARP_DEBUG 0
+#undef NETIF_DEBUG
+#define NETIF_DEBUG 0
+#undef IP_DEBUG
+#define IP_DEBUG 0
+#undef ICMP_DEBUG
+#define ICMP_DEBUG 0
+
 #ifndef ARP_QUEUEING
 #define ARP_QUEUEING 1
 #endif
