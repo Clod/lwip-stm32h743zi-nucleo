@@ -30,6 +30,14 @@ Installation Instructions
      ./waf build
      ```
 
+     **Note**: The default configuration uses 4 RX descriptors (`ETH_RX_DESC_CNT=4`), which is
+     defined in `/opt/rtems/6.1/arm-rtems6/nucleo-h743zi/lib/include/stm32h7xx_hal_conf.h`.
+     
+     Increasing this value (e.g., to 16) can improve RX performance but causes compatibility
+     issues with the pre-compiled HAL library, requiring manual workarounds for TX functionality.
+     The default value of 4 descriptors with 64 RX buffers provides stable operation for most
+     use cases.
+
 More `waf` arguments can be found by using:
 
   ```shell

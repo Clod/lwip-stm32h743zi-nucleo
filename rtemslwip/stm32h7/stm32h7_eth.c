@@ -1525,17 +1525,25 @@ void ethernet_link_thread(void* argument)
             TRACE_PRINTF("ERROR: Failed to allocate buffer for RX descriptor %lu!\n", (unsigned long)i);
           }
         }
-        TRACE_PRINTF("ETH: RX descriptors initialized successfully\n");
-
-        if (HAL_ETH_Start_IT(&heth) != HAL_OK) {
-          TRACE_PRINTF("ERROR: HAL_ETH_Start_IT failed!\n");
-        } else {
-          TRACE_PRINTF("HAL_ETH_Start_IT successful\n");
-          
-          /* ETH_CODE: internal "Kick" to DMA to poll RX descriptors immediately 
-           * by updating the Tail Pointer to the end of the ring/list. */
-          heth.Instance->DMACRDTPR = (uint32_t)(DMARxDscrTab + ETH_RX_DESC_CNT);
-        }
+        /* ETH_CODE: Bypass HAL_ETH_Start_IT because the HAL library was compiled with
+         * ETH_RX_DESC_CNT=4 but our code uses 16, causing structure size mismatch.
+         * Manually start the Ethernet DMA instead. */
+        TRACE_PRINTF("ETH: Manually starting Ethernet (bypassing HAL_ETH_Start_IT)...\n");
+        
+        /* Enable MAC transmission and reception */
+        SET_BIT(heth.Instance->MACCR, ETH_MACCR_TE | ETH_MACCR_RE);
+        
+        /* Enable DMA transmission and reception (STM32H7 uses separate control registers) */
+        SET_BIT(heth.Instance->DMACTCR, ETH_DMACTCR_ST);  /* Start Transmission */
+        SET_BIT(heth.Instance->DMACRCR, ETH_DMACRCR_SR);  /* Start Reception */
+        
+        /* Set the Ethernet state to started */
+        heth.gState = HAL_ETH_STATE_STARTED;
+        
+        /* Kick the RX DMA tail pointer */
+        heth.Instance->DMACRDTPR = (uint32_t)(DMARxDscrTab + ETH_RX_DESC_CNT);
+        
+        TRACE_PRINTF("ETH: Manual start complete\n");
         
         /* ETH_CODE: Manually enable DMA interrupts to ensure they are properly configured
          * This is needed because HAL_ETH_Start_IT() might not enable all required
