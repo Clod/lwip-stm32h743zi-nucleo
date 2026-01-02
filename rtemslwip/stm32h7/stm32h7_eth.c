@@ -709,42 +709,84 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
   /* ETH_CODE: Clean D2 Cache for the bounce buffer to ensure DMA sees the data */
   SCB_CleanDCache_by_Addr((uint32_t *)tx_bounce_buffer, total_len);
 
-  /* Capture current descriptor index before HAL increments it */
-  uint32_t desc_idx = heth.TxDescList.CurTxDesc;
-
-  TRACE_PRINTF("TX: Calling HAL_ETH_Transmit_IT (Desc Index %lu)\n", (unsigned long)desc_idx);
+  /* ========== MANUAL TX DESCRIPTOR MANAGEMENT ========== */
+  /* Get current TX descriptor index */
+  static uint32_t tx_desc_idx = 0;
+  ETH_DMADescTypeDef_Shadow *txdesc = &DMATxDscrTab[tx_desc_idx];
   
-  HAL_ETH_Transmit_IT(&heth, &TxConfig);
+  TRACE_PRINTF("TX: Using descriptor %lu\n", (unsigned long)tx_desc_idx);
   
-  /* ETH_CODE: Insane Logging - Dump Descriptor AFTER HAL setup but BEFORE DMA completion (mostly) */
-  ETH_DMADescTypeDef_Shadow *d = &DMATxDscrTab[desc_idx];
-  (void)d;
-  TRACE_PRINTF("TX: Descriptor [%lu] State AFTER HAL Setup:\n", (unsigned long)desc_idx);
-  TRACE_PRINTF("    DESC0 (Addr) = 0x%08lx (Should be 0x%08lx)\n", (unsigned long)d->DESC0, (unsigned long)ETH_TX_BUFFER_ADDR);
-  TRACE_PRINTF("    DESC1        = 0x%08lx\n", (unsigned long)d->DESC1);
-  TRACE_PRINTF("    DESC2 (Len)  = 0x%08lx\n", (unsigned long)d->DESC2);
-  TRACE_PRINTF("    DESC3 (Ctrl) = 0x%08lx (OWN bit should be 1)\n", (unsigned long)d->DESC3);
+  /* Wait for descriptor to be free (OWN bit = 0) with timeout */
+  uint32_t timeout = 1000;
+  while ((txdesc->DESC3 & 0x80000000) && timeout > 0) {
+    rtems_task_wake_after(1);
+    SCB_InvalidateDCache_by_Addr((uint32_t *)txdesc, sizeof(ETH_DMADescTypeDef_Shadow));
+    timeout--;
+  }
   
-  TRACE_PRINTF("TX: DMA Registers:\n");
-  TRACE_PRINTF("    DMACSR   = 0x%08lx\n", (unsigned long)heth.Instance->DMACSR);
-  TRACE_PRINTF("    DMACTDTPR = 0x%08lx\n", (unsigned long)heth.Instance->DMACTDTPR);
+  if (timeout == 0) {
+    TRACE_PRINTF("TX ERROR: Descriptor %lu timeout\n", (unsigned long)tx_desc_idx);
+    errval = ERR_TIMEOUT;
+    goto tx_cleanup;
+  }
+  
+  TRACE_PRINTF("TX: Descriptor %lu is free\n", (unsigned long)tx_desc_idx);
+  
+  /* Ensure minimum Ethernet frame size (60 bytes without FCS) */
+  uint32_t tx_len = total_len;
+  if (tx_len < 60) {
+    memset(tx_bounce_buffer + tx_len, 0, 60 - tx_len); /* Pad with zeros */
+    tx_len = 60;
+    TRACE_PRINTF("TX: Padded from %lu to 60 bytes\n", (unsigned long)total_len);
+  }
+  
+  /* Setup TX descriptor manually */
+  txdesc->DESC0 = (uint32_t)tx_bounce_buffer;
+  txdesc->DESC1 = 0;
+  txdesc->DESC2 = tx_len & 0x3FFF;
+  txdesc->DESC3 = 0x80000000 | 0x30000000 | 0x04000000; /* OWN | FD+LD | IC */
+  
+  SCB_CleanDCache_by_Addr((uint32_t *)txdesc, sizeof(ETH_DMADescTypeDef_Shadow));
+  __DSB();
+  
+  TRACE_PRINTF("TX: Descriptor setup: DESC0=0x%08lx DESC2=0x%08lx DESC3=0x%08lx\n",
+         (unsigned long)txdesc->DESC0, (unsigned long)txdesc->DESC2, (unsigned long)txdesc->DESC3);
+  
+  /* Kick TX DMA */
+  uint32_t next_desc_idx = (tx_desc_idx + 1) % ETH_TX_DESC_CNT;
+  heth.Instance->DMACTDTPR = (uint32_t)(&DMATxDscrTab[next_desc_idx]);
+  __DSB();
+  
+  TRACE_PRINTF("TX: Kicked DMA, tail=0x%08lx\n", (unsigned long)heth.Instance->DMACTDTPR);
+  
+  /* Poll for completion */
+  timeout = 10000;
+  while ((txdesc->DESC3 & 0x80000000) && timeout > 0) {
+    SCB_InvalidateDCache_by_Addr((uint32_t *)txdesc, sizeof(ETH_DMADescTypeDef_Shadow));
+    rtems_task_wake_after(1); /* Yield to allow other tasks to run */
+    timeout--;
+  }
+  
+  if (timeout == 0) {
+    TRACE_PRINTF("TX ERROR: Transmission timeout\n");
+    errval = ERR_TIMEOUT;
+  } else {
+    TRACE_PRINTF("TX: Complete, DESC3=0x%08lx\n", (unsigned long)txdesc->DESC3);
+  }
+  
+  /* Advance to next descriptor */
+  tx_desc_idx = next_desc_idx;
+  heth.TxDescList.CurTxDesc = tx_desc_idx;
+  
+  TRACE_PRINTF("TX: Advanced to descriptor %lu\n", (unsigned long)tx_desc_idx);
 
-  TRACE_PRINTF("TX: Waiting for TxPktSemaphore...\n");
-  sys_arch_sem_wait(&TxPktSemaphore, TIME_WAITING_FOR_INPUT);
-  TRACE_PRINTF("TX: TxPktSemaphore acquired\n");
-
-  /* ETH_CODE: Insane Logging - Dump Descriptor AFTER DMA Completion */
-  TRACE_PRINTF("TX: Descriptor [%lu] State AFTER DMA Completion:\n", (unsigned long)desc_idx);
-  TRACE_PRINTF("    DESC0 (Addr) = 0x%08lx\n", (unsigned long)d->DESC0);
-  TRACE_PRINTF("    DESC3 (Stat) = 0x%08lx (OWN bit should be 0)\n", (unsigned long)d->DESC3);
-
+tx_cleanup:
   /* ETH_CODE: Restore padding so LwIP can free the pbuf correctly */
 #if defined(ETH_PAD_SIZE) && (ETH_PAD_SIZE > 0)
   pbuf_header(p, ETH_PAD_SIZE);
 #endif
 
-  HAL_ETH_ReleaseTxPacket(&heth);
-  TRACE_PRINTF("TX: Packet released\n");
+  pbuf_free(p);
   TRACE_PRINTF("========== TX END ==========\n\n");
 
   return errval;
