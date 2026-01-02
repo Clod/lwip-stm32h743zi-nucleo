@@ -215,3 +215,104 @@ If the DMA fills all the buffers pointed to by the descriptors it owns before th
 *   It sets `RBU` error flag.
 *   It enters **Suspend** state.
 *   **Fix**: The driver must detect `RBU`, clear the flag, and write to `DMACRDTPR` (Tail Pointer) to tell the DMA to wake up and check the descriptors again.
+
+---
+
+## 8. Building and Testing
+
+This section details how to build the project and verify its functionality using the provided test tools.
+
+### 8.1 Build Instructions
+
+The project uses the `waf` build system.
+
+**1. Prerequisites**
+Ensure git submodules are initialized:
+```bash
+git submodule init
+git submodule update
+```
+
+**2. Configure**
+Run the configuration command. You must specify the RTEMS BSP and installation path.
+
+> **Note**: In the UTN development environment, the RTEMS path is typically `/opt/rtems/6.1`.
+
+```bash
+./waf configure --rtems-bsps=arm/nucleo-h743zi --rtems=<RTEMS_PATH> --rtems-version=6
+```
+
+*Example for UTN environment:*
+```bash
+./waf configure --rtems-bsps=arm/nucleo-h743zi --rtems=/opt/rtems/6.1 --rtems-version=6
+```
+
+**3. Build**
+Compile the project:
+```bash
+./waf
+```
+
+**4. Output**
+The test application binary will be generated at:
+`build/arm-rtems6-nucleo-h743zi/stm32h7_test.exe`
+
+### 8.2 Testing & Verification
+
+To verify the network stack, we use a specific test application running on the board and a python regression script running on a host Linux machine.
+
+#### Network Setup
+The test application is hardcoded with the following network settings:
+*   **Board IP**: `192.168.1.10`
+*   **Netmask**: `255.255.255.0`
+*   **Gateway**: `192.168.1.1`
+
+**Host Machine Configuration**:
+Your host machine must be on the same subnet (e.g., `192.168.1.x`). You may need to manually configure your Ethernet interface.
+
+*Example Linux command to set host IP to 192.168.1.20:*
+```bash
+# Replace eth0 with your actual interface name (e.g., enp3s0, eth1)
+sudo ip addr add 192.168.1.20/24 dev eth0
+```
+
+#### Running the Test App (`stm32h7_test.exe`)
+1.  **Flash** the `stm32h7_test.exe` binary to the Nucleo board.
+2.  **Connect** to the serial console (115200 baud).
+3.  **Reset** the board.
+
+**Expected Serial Output**:
+```text
+*** STM32H7 LWIP TEST ***
+Waiting for Ethernet link to come up...
+Interface is UP. IP: 192.168.1.10
+Starting lwiperf server on port 5001...
+HB: IRQs=... Rx=...
+```
+The "HB" (Heartbeat) line indicates the application is running and the main loop is active.
+
+#### Automated Regression Testing
+We provide a Python script to automate validation. This script performs:
+*   **UDP Echo Tests**: Verifies data integrity, especially for small/unaligned packets which are critical for this driver.
+*   **ICMP Ping**: Checks basic connectivity.
+*   **Iperf Throughput**: Checks TCP performance (requires `iperf` installed on host).
+
+**Script Location**: `test/regression_test.py`
+
+**Running the Test**:
+From the root of the repository on your host machine:
+
+```bash
+python3 test/regression_test.py --board-ip 192.168.1.10
+```
+
+**Successful Output**:
+You should see a series of PASS messages:
+```text
+[PASS] UDP-Tiny-1: "A" → "A" (2ms)
+...
+[PASS] Ping-Basic: 5/5 packets...
+[PASS] iperf-RX: 2.16 Mbps
+...
+Status: ✅ ALL TESTS PASSED
+```
