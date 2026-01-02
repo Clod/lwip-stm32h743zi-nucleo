@@ -67,6 +67,10 @@
 #define IP_DEBUG 0
 #undef ICMP_DEBUG
 #define ICMP_DEBUG 0
+#undef TCP_DEBUG
+#define TCP_DEBUG LWIP_DBG_OFF
+#undef UDP_DEBUG
+#define UDP_DEBUG LWIP_DBG_OFF
 
 #ifndef ARP_QUEUEING
 #define ARP_QUEUEING 1
