@@ -140,7 +140,8 @@ def build(bld):
     if bsp == 'nucleo-h743zi':
         bld.program(features='c',
                     target='stm32h7_test.exe',
-                    source='rtemslwip/test/stm32h7_test/stm32h7_test.c',
+                    source=['rtemslwip/test/stm32h7_test/stm32h7_test.c',
+                            'rtemslwip/test/stm32h7_test/udp_server.c'],
                     cflags='-g -Wall -O0',
                     install_path=None,
                     use='lwip',

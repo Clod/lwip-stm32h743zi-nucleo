@@ -44,6 +44,9 @@
 #define LWIP_COMPAT_MUTEX 0
 #define LWIP_ALLOW_MEM_FREE_FROM_OTHER_CONTEXT 1
 
+/* CRITICAL: Force 4-byte alignment to prevent unaligned access faults */
+#define MEM_ALIGNMENT 4
+
 #ifndef LWIP_NETIF_LINK_CALLBACK
 #define LWIP_NETIF_LINK_CALLBACK 1
 #endif
@@ -265,7 +268,7 @@
 #endif
  
  #ifndef ETH_PAD_SIZE
- #define ETH_PAD_SIZE 2
+ #define ETH_PAD_SIZE 2  /* Optimal IP Alignment: Header starts at offset 4N */
  #endif
 
 #ifndef TCP_OVERSIZE

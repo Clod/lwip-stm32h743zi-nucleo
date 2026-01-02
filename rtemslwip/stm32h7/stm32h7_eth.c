@@ -1002,7 +1002,7 @@ static struct pbuf * low_level_input(struct netif *netif)
            /* Get the pbuf from the back-up address */
            if (DMARxDscrBackup[idx] != 0) {
                uint8_t *buff_with_offset = (uint8_t *)DMARxDscrBackup[idx];
-               uint8_t *actual_buff = buff_with_offset - 2;
+               uint8_t *actual_buff = buff_with_offset - ETH_PAD_SIZE;
                TRACE_PRINTF("LLI: Buffer address: backup=0x%08lx, actual=0x%08lx\n",
                       (unsigned long)DMARxDscrBackup[idx], (unsigned long)actual_buff);
 
@@ -1010,11 +1010,11 @@ static struct pbuf * low_level_input(struct netif *netif)
                struct pbuf_custom *p_custom = (struct pbuf_custom *)p_manual;
 
                /* ETH_CODE: Use pbuf_alloced_custom with actual buffer start.
-                * We include ETH_PAD_SIZE (2 bytes) in the length so LwIP can strip it.
+                * We include ETH_PAD_SIZE in the length so LwIP can strip it if needed.
                 * Note: We do NOT manually adjust p->payload here. LwIP's ethernet_input
-                * will do pbuf_header(p, -ETH_PAD_SIZE) to skip the padding. */
+                * will do pbuf_header(p, -ETH_PAD_SIZE) to skip the padding if ETH_PAD_SIZE > 0. */
                p_custom->custom_free_function = pbuf_free_custom;
-               p = pbuf_alloced_custom(PBUF_RAW, pkt_len + 2, PBUF_REF, p_custom, actual_buff, ETH_RX_BUFFER_SIZE);
+               p = pbuf_alloced_custom(PBUF_RAW, pkt_len + ETH_PAD_SIZE, PBUF_REF, p_custom, actual_buff, ETH_RX_BUFFER_SIZE);
 
                if (p != NULL) {
                    SCB_InvalidateDCache_by_Addr((uint32_t *)actual_buff, pkt_len);
@@ -1661,11 +1661,9 @@ void HAL_ETH_RxAllocateCallback(uint8_t **buff)
   {
     TRACE_PRINTF("RX_ALLOC: Allocated pbuf_custom at 0x%p\n", p);
     /* Get the buff from the struct pbuf address. */
-    /* ETH_CODE: With ETH_PAD_SIZE=2, DMA receives data at buff[2] so that IP header
-     * is 4-byte aligned. The pbuf points to the actual buffer, but we report
-     * buff+2 to the HAL so that DMA writes start at the correct offset. */
-    *buff = (uint8_t *)p + offsetof(RxBuff_t, buff) + 2;
-    TRACE_PRINTF("RX_ALLOC: buff=0x%p (with +2 offset), actual buff=0x%p\n", *buff, (uint8_t *)p + offsetof(RxBuff_t, buff));
+    /* ETH_CODE: Apply ETH_PAD_SIZE offset for IP header alignment */
+    *buff = (uint8_t *)p + offsetof(RxBuff_t, buff) + ETH_PAD_SIZE;
+    TRACE_PRINTF("RX_ALLOC: buff=0x%p (with +%d offset), actual buff=0x%p\n", *buff, ETH_PAD_SIZE, (uint8_t *)p + offsetof(RxBuff_t, buff));
     p->custom_free_function = pbuf_free_custom;
     /* Initialize the struct pbuf.
     * This must be performed whenever a buffer's allocated because it may be
@@ -1692,9 +1690,9 @@ void HAL_ETH_RxLinkCallback(void **pStart, void **pEnd, uint8_t *buff, uint16_t 
   struct pbuf **ppEnd = (struct pbuf **)pEnd;
   struct pbuf *p = NULL;
 
-  /* ETH_CODE: buff points to buff+2 (due to ETH_PAD_SIZE=2 offset in HAL_ETH_RxAllocateCallback)
+  /* ETH_CODE: buff points to buff+ETH_PAD_SIZE offset from HAL_ETH_RxAllocateCallback
    * Calculate actual buffer start and adjust pbuf accordingly. */
-  uint8_t *actual_buff = buff - 2;
+  uint8_t *actual_buff = buff - ETH_PAD_SIZE;
   
   /* Get the struct pbuf from the actual buff address. */
   p = (struct pbuf *)(actual_buff - offsetof(RxBuff_t, buff));
@@ -1771,44 +1769,56 @@ static void MPU_Config(void)
 
   /* Disables the MPU */
   HAL_MPU_Disable();
- 
-  TRACE_PRINTF("MPU_Config: CCR before = 0x%08lx\n", (unsigned long)SCB->CCR);
+
+  /** Region 0: Full 4GB - Normal, Non-cacheable, Full Access
+   * This provides a safe background for the whole address space.
+   */
+  MPU_InitStruct.Enable = MPU_REGION_ENABLE;
+  MPU_InitStruct.Number = MPU_REGION_NUMBER0;
+  MPU_InitStruct.BaseAddress = 0x00000000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_4GB;
+  MPU_InitStruct.SubRegionDisable = 0x00;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
+  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /** Region 1: D1 SRAM (0x24000000) - Normal, Cacheable (Write-Back)
+   * TEX=1, C=1, B=1 for Normal Memory.
+   */
+  MPU_InitStruct.Number = MPU_REGION_NUMBER1;
+  MPU_InitStruct.BaseAddress = 0x24000000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_512KB;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /** Region 2: D2 SRAM (0x30000000) - Normal, Cacheable (Write-Back)
+   * Covers SRAM1, SRAM2, SRAM3.
+   */
+  MPU_InitStruct.Number = MPU_REGION_NUMBER2;
+  MPU_InitStruct.BaseAddress = 0x30000000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_512KB;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /* Enables the MPU */
+  HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
+  
+  /* CRITICAL: Disable unaligned access traps */
   SCB->CCR &= ~SCB_CCR_UNALIGN_TRP_Msk;
   __DSB();
   __ISB();
-  TRACE_PRINTF("MPU_Config: CCR after  = 0x%08lx\n", (unsigned long)SCB->CCR);
- 
-  /** Initializes and configures the Region and the memory to be protected
-  */
-  MPU_InitStruct.Enable = MPU_REGION_ENABLE;
-  MPU_InitStruct.Number = MPU_REGION_NUMBER0;
-  MPU_InitStruct.BaseAddress = 0x0;
-  MPU_InitStruct.Size = MPU_REGION_SIZE_4GB;
-  MPU_InitStruct.SubRegionDisable = 0x87;
-  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
-  MPU_InitStruct.AccessPermission = MPU_REGION_NO_ACCESS;
-  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
-  MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
-  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
-  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
-
-  HAL_MPU_ConfigRegion(&MPU_InitStruct);
-
-  /** Region 1: D2 SRAM (Buffers & Descriptors) - Non-cacheable, Non-bufferable
-  */
-  MPU_InitStruct.Number = MPU_REGION_NUMBER1;
-  MPU_InitStruct.BaseAddress = 0x30000000;
-  MPU_InitStruct.Size = MPU_REGION_SIZE_512KB;
-  MPU_InitStruct.SubRegionDisable = 0x0;
-  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1; /* Normal property */
-  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
-  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
-  MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
-  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
-  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
-
-  HAL_MPU_ConfigRegion(&MPU_InitStruct);
-  /* Enables the MPU */
-  HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
+  
+  TRACE_PRINTF("MPU_Config: Robust Normal Memory configured (CCR=0x%08lx)\n", (unsigned long)SCB->CCR);
 }
 /* USER CODE END 8 */

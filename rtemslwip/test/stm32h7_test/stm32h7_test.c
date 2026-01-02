@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include "tmacros.h"
 #include "trace_config.h"
+#include "udp_server.h"
 
 const char rtems_test_name[] = "STM32H7 LWIP TEST";
 
@@ -29,6 +30,11 @@ void Error_Handler(void)
 
 static rtems_task Init(rtems_task_argument argument)
 {
+  /* Force disable unaligned access traps */
+  SCB->CCR &= ~SCB_CCR_UNALIGN_TRP_Msk;
+  __DSB();
+  __ISB();
+
   ip4_addr_t ipaddr, netmask, gw;
 
   printf("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n*** STM32H7 LWIP TEST ***\n");
@@ -53,6 +59,12 @@ static rtems_task Init(rtems_task_argument argument)
   LOCK_TCPIP_CORE();
   lwiperf_start_tcp_server_default(lwiperf_report, NULL);
   UNLOCK_TCPIP_CORE();
+  
+  /* Give system a moment to settle before starting UDP server */
+  rtems_task_wake_after(rtems_clock_get_ticks_per_second());
+  
+  /* Start UDP Echo Server */
+  udp_server_init();
 
   extern __IO uint32_t EthIrqCount;
   extern __IO uint32_t RxIrqCount;
