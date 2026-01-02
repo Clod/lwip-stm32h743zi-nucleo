@@ -106,6 +106,7 @@ typedef enum
 typedef struct __attribute__((aligned(32)))
 {
   struct pbuf_custom pbuf_custom;
+  uint32_t align_placeholder; /* Forces 'buff' to start at a 4-byte boundary */
   uint8_t buff[ETH_RX_BUFFER_SIZE];
 } RxBuff_t;
 

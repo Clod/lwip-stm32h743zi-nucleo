@@ -44,6 +44,23 @@
 #define LWIP_COMPAT_MUTEX 0
 #define LWIP_ALLOW_MEM_FREE_FROM_OTHER_CONTEXT 1
 
+/* Strictly byte-by-byte MEMCPY for STM32H7 to avoid all hardware traps.
+ * Optimized memcpy can use ldrh/strh which fault on unaligned D2/D1 SRAM.
+ */
+#include <string.h>
+#include <stdint.h>
+#include <stddef.h>
+static inline void stm32h7_byte_memcpy(void *dst, const void *src, size_t len) {
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    while (len--) {
+        *d++ = *s++;
+    }
+}
+#define MEMCPY(dst, src, len)  stm32h7_byte_memcpy(dst, src, len)
+#define SMEMCPY(dst, src, len) stm32h7_byte_memcpy(dst, src, len)
+#define MEMMOVE(dst, src, len) stm32h7_byte_memcpy(dst, src, len)
+
 /* CRITICAL: Force 4-byte alignment to prevent unaligned access faults */
 #define MEM_ALIGNMENT 4
 
